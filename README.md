@@ -25,11 +25,19 @@ If you want to contact us, feel free to join the public **Matrix** room `#arnika
 
 ## Quantum secure VPN
 
-![Arnika Encapsulation Pipe, Figure 1](img/Arnika-Encapsulations-pipe.png)
-<br/>_Figure 1_
+<table border="0" cellpadding="0" cellspacing="0">
+  <tr>
+    <td align="center">
+        <a href="img/Arnika-Encapsulations-pipe.png"><img src="img/Arnika-Encapsulations-pipe.png" alt="Arnika Encapsulation Pipe, Figure 1" width="500"/></a>
+        <br/><em>Figure 1</em>
+    </td>
+    <td align="center">
+        <a href="img/Arnika-Wireguard-PSK.png"><img src="img/Arnika-Wireguard-PSK.png" alt="Arnika Wireguard PSK, Figure 2" width="500"/></a>
+        <br/><em>Figure 2</em>
+    </td>
+  </tr>
+</table>
 
-![Arnika Wireguard PSK, Figure 2](img/Arnika-Wireguard-PSK.png)
-<br/>_Figure 2_
 
 ## Wireguard + PQC + Arnika
 
@@ -51,8 +59,14 @@ Regardless of the selected mode, WireGuard always receives a single 256bit (32by
 _Figure 3_ shows the key path of 2 interconnected sites for the hyprid mode (C) (QKD+PQC). In this scenario, the **KEY-CONTROL function** serves as a control entity, responsible for obtaining a **key** and transferring it to the encryption function (WireGuard).
 
 
-![QKD | PQC functions post-quantum secure VPN, Figure 3](img/QKD-PQC-functions_post-quantum-secure-VPN.png)
-<br/>_Figure 3_
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+  <tr>
+    <td align="center">
+        <a href="img/QKD-PQC-functions_post-quantum-secure-VPN.png"><img src="img/QKD-PQC-functions_post-quantum-secure-VPN.png" alt="QKD | PQC functions post-quantum secure VPN, Figure 3" width="100%"/></a>
+        <br/><em>Figure 3</em>
+    </td>
+  </tr>
+</table>
 
 The QKD key is obtained via ETSI014 from the QKDs embedded KMS and the PQC key is obtained via API or pointer/filedescriptor from any alternative PQC function/implementation.
 
