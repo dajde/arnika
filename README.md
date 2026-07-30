@@ -12,7 +12,7 @@
 
 It gathers a 256-bit symmetric encryption key from a Key Management System (**KMS**) within a Quantum Key Distribution (**QKD**) infrastructure, shares the associated key ID with an Arnika peer, and configures an additional Pre-Shared Key (**PSK**) for Wireguard using the obtained key material.
 
-Arnika offers an additional security layer for cryptography enthusiasts. It can integrate Post-Quantum Cryptography (**PQC**) by leveraging a PQC key provided by a system like **Rosenpass**. This key is then used to create an even stronger Preshared Key (PSK) for WireGuard. This PSK benefits from both **PQC** and **QKD**, offering enhanced protection against potential security threats.
+Arnika offers an additional security layer for cryptography enthusiasts. It can integrate Post-Quantum Cryptography (**PQC**) by leveraging a PQC key provided by an external PQC framework. This key is then used to create an even stronger Preshared Key (PSK) for WireGuard. This PSK benefits from both **PQC** and **QKD**, offering enhanced protection against potential security threats.
 
 
 Arnika integrates with WireGuard to establish quantum-resistant VPN connections, adding a significant layer of security to your communication
@@ -31,9 +31,9 @@ If you want to contact us, feel free to join the public **Matrix** room `#arnika
 ![Arnika Wireguard PSK, Figure 2](img/Arnika-Wireguard-PSK.png)
 <br/>_Figure 2_
 
-## Wireguard + Rosenpass + Arnika
+## Wireguard + PQC + Arnika
 
-SAE (Secure Application Entity) = Wireguard + Rosenpass + Arnika
+SAE (Secure Application Entity) = Wireguard + PQC + Arnika
 
 ### QKD and PQC to achieve quantum resistance
 
@@ -54,7 +54,7 @@ _Figure 3_ shows the key path of 2 interconnected sites for the hyprid mode (C) 
 ![QKD | PQC functions post-quantum secure VPN, Figure 3](img/QKD-PQC-functions_post-quantum-secure-VPN.png)
 <br/>_Figure 3_
 
-The QKD key is obtained via ETSI014 from the QKDs embedded KMS and the PQC key is obtained via API or pointer/filedescriptor from a source such as **Rosenpass** or any alternative PQC function/implementation.
+The QKD key is obtained via ETSI014 from the QKDs embedded KMS and the PQC key is obtained via API or pointer/filedescriptor from any alternative PQC function/implementation.
 
 
 Subsequently, the **KEY-CONTROL function** uses the **QKD key** and **PQC key** by using a **HKDF HMAC Key Derivation Function** with SHA3-256 as the hash function, to derive a single key from the two input keys (QKD, PQC).
@@ -69,7 +69,7 @@ QKD/PQC operation on **Layer 3** offers several notable advantages:
 * PQC/QKD keys can be injected as preshared key at runtime by design
 * no change in existing WireGuard setups
 * L3 based VPN can go over any existing, affortable, foreign infrastructure over the internet
-* Rosenpass (PQC) already implemented in netbird commercial VPN service [Netbird](https://netbird.io/) that supports mesh functionality
+* PQC crypto agility
 * unaffected by patent "Method of integrating QKD with IPSec" (US7602919B2,CN101142779A,...)
 
 
@@ -82,7 +82,7 @@ QKD/PQC operation on **Layer 3** offers several notable advantages:
 The `Secure Application Entity` consists of following components running on a secure and hardened linux system:
 * WireGuard
 * Arnika
-* Rosenpass (optional)
+* PQC (optional)
 
 ### WireGuard
 
@@ -91,7 +91,7 @@ WireGuard must be installed/setup separately before Arnika can be used. For furt
 ### PQC 
 
 PQC is optional, Arnika can run without PQC, then it will run in QKD mode only. 
-For further installation instructions, refer to the [Rosenpass](https://rosenpass.eu/) homepage.
+For further installation instructions, refer to the PQC key provider.
 
 
 ### golang version
@@ -356,11 +356,7 @@ Refer to [WireGuard](https://www.wireguard.com/) Homepage [https://www.wireguard
 
 ## Rosenpass
 
-Refer to Rosenpass [homepage](https://rosenpass.eu/) and [whitepaper](https://rosenpass.eu/whitepaper.pdf) for more technical details.
-Rosenpass is free and open-source software (FOSS) and licensed under Apache 2.0 license.
-
-Many thanks to [Paul](https://github.com/aparcar) and [Karo](https://github.com/koraa) from the [**Rosenpass**](https://github.com/rosenpass/rosenpass) project.
-
+Many thanks to the [**Rosenpass**](https://github.com/rosenpass/rosenpass) project.
 
 ## QCI-CAT
 

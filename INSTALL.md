@@ -26,7 +26,7 @@ This guide provides step-by-step instructions for manually installing the Arnika
 1. Prerequisites
 2. Ubuntu System Configuration
 3. Wireguard Installation
-4. Rosenpass Installation (Optional - for PQC mode)
+4. PQC provider Installation (Optional - for PQC mode)
 5. KMS Installation (Optional - for KMS mode)
 6. Arnika Installation
 7. Tools Installation
@@ -39,7 +39,7 @@ This guide provides step-by-step instructions for manually installing the Arnika
 - Root or sudo access
 - Internet connectivity
 - Pre-generated Wireguard keys for both hosts (private keys, public keys, and PSK)
-- (Optional) Rosenpass keys for PQC mode
+- (Optional) PQC keys for PQC mode
 - (Optional) KMS certificates for KMS mode
 - Arnika version v0.2.2 (current stable version)
 
@@ -165,117 +165,12 @@ Perform these steps on both Alice and Bob servers:
    sudo systemctl start wg-quick@qcicat0
    ```
 
-## Rosenpass Installation
+## PQC key provider Installation
 
 > Note: This section is only required if you want to enable Post-Quantum Cryptography (PQC) mode.
 
-Perform these steps on both Alice and Bob servers:
+For a installation guide, refer to the external PQC key provider of your choice.
 
-1. Create required directories:
-
-   ```bash
-   sudo mkdir -p /opt/rosenpass
-   sudo mkdir -p /opt/rosenpass/alice  # on Alice's server
-   sudo mkdir -p /opt/rosenpass/bob    # on both servers
-   sudo mkdir -p /opt/rosenpass/key_out
-   ```
-
-2. Download and extract Rosenpass:
-
-   ```bash
-   wget https://github.com/rosenpass/rosenpass/releases/download/v0.2.2/rosenpass-x86_64-linux-0.2.2.tar -O /tmp/rosenpass.tar
-   sudo tar -xf /tmp/rosenpass.tar -C /opt/rosenpass
-   ```
-
-3. Create a symlink to the binary:
-
-   ```bash
-   sudo ln -sf /opt/rosenpass/bin/rosenpass /usr/local/sbin/rosenpass
-   ```
-
-4. Copy your pre-generated Rosenpass keys to the appropriate directories:
-
-   **For Alice**:
-   ```bash
-   sudo cp <ALICE_PRIVATE_KEY_FILE> /opt/rosenpass/alice/pqsk
-   sudo cp <ALICE_PUBLIC_KEY_FILE> /opt/rosenpass/alice/pqpk
-   sudo cp <BOB_PUBLIC_KEY_FILE> /opt/rosenpass/bob/pqpk
-
-   sudo chmod 640 /opt/rosenpass/alice/pqsk
-   sudo chmod 640 /opt/rosenpass/alice/pqpk
-   sudo chmod 640 /opt/rosenpass/bob/pqpk
-   ```
-
-   **For Bob**:
-   ```bash
-   sudo cp <BOB_PRIVATE_KEY_FILE> /opt/rosenpass/bob/pqsk
-   sudo cp <BOB_PUBLIC_KEY_FILE> /opt/rosenpass/bob/pqpk
-   sudo cp <ALICE_PUBLIC_KEY_FILE> /opt/rosenpass/alice/pqpk
-
-   sudo chmod 640 /opt/rosenpass/bob/pqsk
-   sudo chmod 640 /opt/rosenpass/bob/pqpk
-   sudo chmod 640 /opt/rosenpass/alice/pqpk
-   ```
-
-5. Create the Rosenpass configuration file:
-
-   **For Alice (client mode)**:
-   ```bash
-   sudo tee /opt/rosenpass/rp.toml > /dev/null << EOF
-   ## rp.toml ###################################
-   secret_key = "/opt/rosenpass/alice/pqsk"
-   public_key = "/opt/rosenpass/alice/pqpk"
-   listen = ["[::]:9998"]
-   verbosity = "Verbose"
-
-   [[peers]]
-   public_key = "/opt/rosenpass/bob/pqpk"
-   endpoint = "<BOB_IP>:9998"
-   key_out = "/opt/rosenpass/key_out/pqc_psk"
-   EOF
-   ```
-
-   **For Bob (server mode)**:
-   ```bash
-   sudo tee /opt/rosenpass/rp.toml > /dev/null << EOF
-   ## rp.toml ###################################
-   secret_key = "/opt/rosenpass/bob/pqsk"
-   public_key = "/opt/rosenpass/bob/pqpk"
-   listen = ["<BOB_IP>:9998"]
-   verbosity = "Verbose"
-
-   [[peers]]
-   public_key = "/opt/rosenpass/alice/pqpk"
-   # No endpoint as this is server mode
-   key_out = "/opt/rosenpass/key_out/pqc_psk"
-   EOF
-   ```
-
-6. Create a systemd service for Rosenpass:
-
-   ```bash
-   sudo tee /etc/systemd/system/rp.service > /dev/null << EOF
-   # /etc/systemd/system/rp.service
-   [Unit]
-   Description=Rosenpass PQC Service
-
-   [Service]
-   Type=simple
-   ExecStart=/opt/rosenpass/bin/rosenpass exchange-config /opt/rosenpass/rp.toml
-   Restart=on-failure
-
-   [Install]
-   WantedBy=multi-user.target
-   EOF
-   ```
-
-7. Enable and start the Rosenpass service:
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable rp.service
-   sudo systemctl start rp.service
-   ```
 
 ## KMS Installation
 
@@ -387,7 +282,7 @@ Perform these steps on both Alice and Bob servers:
    WIREGUARD_INTERFACE="qcicat0"
    WIREGUARD_PEER_PUBLIC_KEY="<BOB_WIREGUARD_PUBLIC_KEY>"
    # Uncomment if using PQC mode:
-   PQC_PSK_FILE="/opt/rosenpass/key_out/pqc_psk"
+   PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
    EOF
    ```
 
@@ -404,7 +299,7 @@ Perform these steps on both Alice and Bob servers:
    WIREGUARD_INTERFACE="qcicat0"
    WIREGUARD_PEER_PUBLIC_KEY="<ALICE_WIREGUARD_PUBLIC_KEY>"
    # Uncomment if using PQC mode:
-   PQC_PSK_FILE="/opt/rosenpass/key_out/pqc_psk"
+   PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
    EOF
    ```
 
@@ -505,19 +400,19 @@ Perform these steps on both Alice and Bob servers:
 
    if [[ "\$INPUT" == "start" ]]
    then
-       echo "start: systemctl start wg-quick@qcicat0 rp kms arnika"
-       systemctl start wg-quick@qcicat0 rp kms arnika
+       echo "start: systemctl start wg-quick@qcicat0 kms arnika"
+       systemctl start wg-quick@qcicat0 kms arnika
    elif [[ "\$INPUT" == "stop" ]]
    then
-       echo "stop: systemctl stop wg-quick@qcicat0 rp kms arnika"
-       systemctl stop wg-quick@qcicat0 rp kms arnika
+       echo "stop: systemctl stop wg-quick@qcicat0 kms arnika"
+       systemctl stop wg-quick@qcicat0 kms arnika
    else
-       echo "status: systemctl status wg-quick@qcicat0 rp kms arnika"
-       systemctl status wg-quick@qcicat0 rp kms arnika
+       echo "status: systemctl status wg-quick@qcicat0 kms arnika"
+       systemctl status wg-quick@qcicat0 kms arnika
    fi
 
    echo
-   echo "journalctl -f -u wg-quick@qcicat0 -u arnika -u rp -u kms"
+   echo "journalctl -f -u wg-quick@qcicat0 -u arnika -u kms"
    echo
    EOF
    ```
@@ -546,9 +441,6 @@ Perform these steps on both Alice and Bob servers:
    wg-quick up qcicat0
 
    wg showconf qcicat0
-
-   # For PQC mode
-   tmux new -d -s rp 'rosenpass exchange-config /opt/rosenpass/rp.toml' \;
 
    # For KMS mode
    tmux new -d -s kms '/opt/kms/kms' \;
@@ -640,11 +532,6 @@ sudo systemctl status wg-quick@qcicat0
 sudo systemctl start wg-quick@qcicat0
 sudo systemctl stop wg-quick@qcicat0
 
-# Rosenpass (PQC mode)
-sudo systemctl status rp
-sudo systemctl start rp
-sudo systemctl stop rp
-
 # KMS (KMS mode)
 sudo systemctl status kms
 sudo systemctl start kms
@@ -665,7 +552,7 @@ init_tmux.sh
 This allows you to manage and monitor each service easily. You can attach to any session using:
 
 ```bash
-tmux attach -t [session_name]  # where session_name is: rp, kms, arnika, wg, ping
+tmux attach -t [session_name]  # where session_name is: kms, arnika, wg, ping
 ```
 
 ## Verification
@@ -692,7 +579,6 @@ tmux attach -t [session_name]  # where session_name is: rp, kms, arnika, wg, pin
 
    ```bash
    journalctl -u wg-quick@qcicat0
-   journalctl -u rp
    journalctl -u kms
    journalctl -u arnika
    ```

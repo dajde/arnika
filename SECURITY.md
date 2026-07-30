@@ -4,7 +4,7 @@
 
 **Arnika** is a security-critical component designed to supply quantum-resistant Pre-Shared Keys
 (PSK) to WireGuard VPN by integrating keys from a Quantum Key Distribution (QKD) Key Management
-System (KMS) via ETSI GS QKD 014 and/or Post-Quantum Cryptography (PQC) via Rosenpass. It is
+System (KMS) via ETSI GS QKD 014 and/or Post-Quantum Cryptography (PQC). It is
 developed in the scope of the EU **EUROQCI / QCI-CAT** research program.
 
 Arnika injects the derived PSK **directly into a kernel WireGuard interface via the Linux Netlink /
@@ -124,8 +124,7 @@ The following are **in scope** for security reports:
 The following are **out of scope**:
 
 - Vulnerabilities in WireGuard itself (report to [WireGuard project](https://www.wireguard.com/))
-- Vulnerabilities in Rosenpass (report to
-  [Rosenpass project](https://github.com/rosenpass/rosenpass))
+- Vulnerabilities in external PQC key provider
 - Vulnerabilities in the underlying QKD hardware or ETSI014-compliant KMS (report to the
   respective vendor)
 - Security issues in the Linux kernel Netlink subsystem or kernel WireGuard driver itself
@@ -133,8 +132,7 @@ The following are **out of scope**:
 - Theoretical attacks requiring physical access to the QKD optical channel
 - The KMS mock (`tools/kms`) is **not** intended for production; misconfigurations in
   development/test environments are out of scope
-- `PQC_PSK_FILE`: insecure file permissions, symlink attacks, or file descriptor leakage from
-  Rosenpass integration
+- `PQC_PSK_FILE`: insecure file permissions, symlink attacks, or file descriptor leakage from PQK key provider integration
 
 ---
 
@@ -191,7 +189,7 @@ mode are in scope.
 
 ### PQC Key File & Directory Hardening
 
-The `PQC_PSK_FILE` mechanism reads PSK material from a file provided by Rosenpass or an external
+The `PQC_PSK_FILE` mechanism reads PSK material from a file provided an external
 key provider. While setting the file to `0600` restricts access, this alone is insufficient if the
 parent directory remains writable by the Arnika process user.
 
