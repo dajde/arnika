@@ -87,6 +87,15 @@ QKD/PQC operation on **Layer 3** offers several notable advantages:
 * unaffected by patent "Method of integrating QKD with IPSec" (US7602919B2,CN101142779A,...)
 
 
+# Improvements since v1.x
+
+- Hexagonal Architecture (Ports & Adapters) provides capability to develop own key-reader and key-writer adapters
+- symmetric-PSK based (_quantum secure_) mutual authentication of Arnika peers - (HMAC-SHA256 + AES-256-GCM authenticated UDP protocol)
+- Arnika listening port is undetectable and unscannable, like wireguard
+- Per-IP UDP rate limiting against flood/DoS attempts
+- Memory hardening — key material is explicitly zeroed after use (`runtime/secret`)
+- KMS request retry with exponential backoff for resilience
+
 
 ---
 
