@@ -111,17 +111,32 @@ func (r *HTTPKMSRepository) kmsRequest(path string) (id string, key []byte, err 
 		if err == nil && res.StatusCode == http.StatusOK {
 			break
 		}
+		// Close and clear before deciding whether to retry, so that a body is
+		// never carried out of the loop after being closed. Previously the
+		// close happened after the retry decision and res kept its value, so
+		// a non-OK status on the final attempt left a closed body in res --
+		// and because a 4xx/5xx is a successful HTTP transaction, err was nil
+		// and the check below did not return. io.ReadAll then failed with
+		// "http: read on closed response body".
+		if res != nil {
+			_ = res.Body.Close()
+			res = nil
+		}
 		if attempt < r.maxRetries {
 			delay := r.backoffBaseDelay * time.Duration(1<<uint(attempt))
 			log.Printf("Attempt %d: Retrying in %s...", attempt+1, delay)
 			time.Sleep(delay)
 		}
-		if res != nil {
-			_ = res.Body.Close()
-		}
 	}
 	if err != nil {
 		return "", nil, err
+	}
+	// A retry loop that never saw a 200 leaves res nil. Without this the
+	// caller could not distinguish "the KMS refused" from a successful fetch,
+	// because a non-OK status sets no error of its own.
+	if res == nil {
+		return "", nil, fmt.Errorf("KMS did not return %d after %d attempt(s)",
+			http.StatusOK, r.maxRetries+1)
 	}
 	defer func() { _ = res.Body.Close() }()
 
