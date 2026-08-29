@@ -1,0 +1,372 @@
+# KEYCONTROL.md
+
+## Developing Key Reader and Key Writer Modules
+
+This is the **developer guide** for Arnika's key I/O layer. It describes the
+architecture that every key source and every key sink plugs into, the contracts
+a module must satisfy, the naming and build conventions to follow, and the
+step-by-step procedure for adding a new module.
+
+It is deliberately **backend-agnostic**. Anything specific to one backend —
+its configuration, its remote prerequisites, its build and deployment steps —
+belongs in that module's own document under [`docs/`](docs/), never here.
+
+> **Documentation rule:** every key reader and key writer module is documented
+> in **exactly one** file at `docs/<module-name>.md`, where `<module-name>`
+> matches the adapter file name in [`repositories/`](repositories/).
+> For example `repositories/wireguard-mikrotik.go` →
+> [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md).
+> A module is not finished until that document exists.
+
+---
+
+## The Concept
+
+Arnika follows a **ports-and-adapters** (hexagonal) design for key I/O:
+
+- A **Key Reader** is a *source* of key material. It answers the question
+  _"give me the next key"_. Examples: a QKD/KMS server, a PQC key file.
+- A **Key Writer** is a *sink* for key material. It answers the question
+  _"install this PSK into WireGuard"_. Examples: the local WireGuard kernel
+  interface, a remote MikroTik router.
+
+Each side is a thin **service** (the port) wrapping a **repository** (the
+adapter). The service defines a small interface; each backend is one
+implementation of that interface. [`main.go`](main.go) only ever talks to the
+services, so adding or replacing a backend never changes the core key-exchange
+logic.
+
+```mermaid
+flowchart LR
+    subgraph Readers["KEY READERS (runtime-selected)"]
+        direction TB
+        KMS["HTTPKMSRepository<br/>(QKD / managed)"]
+        PQC["FilePQCRepository<br/>(PQC / unmanaged)"]
+        RNEW["your reader<br/>(managed or unmanaged)"]
+    end
+
+    subgraph Core["main.go / setPSK()"]
+        direction TB
+        RS["KeyReaderService"]
+        KDF["HKDF derive<br/>(QKD + PQC)"]
+        WS["KeyWriterService"]
+        RS --> KDF --> WS
+    end
+
+    subgraph Writers["KEY WRITERS (compile-time / build tags)"]
+        direction TB
+        NL["WireguardNetlinkRepository<br/>tag: default / wireguard_netlink"]
+        MT["WireguardMikrotikRepository<br/>tag: wireguard_mikrotik"]
+        WNEW["your writer<br/>tag: wireguard_yourbackend"]
+    end
+
+    KMS --> RS
+    PQC --> RS
+    RNEW --> RS
+    WS --> NL
+    WS --> MT
+    WS --> WNEW
+```
+
+**The key asymmetry:** readers are selected at **runtime**, writers at
+**compile time**. See the two sections below for why.
+
+---
+
+## Module Index
+
+| Module | Kind | Adapter | Build tag | Document |
+|---|---|---|---|---|
+| `kms` | Reader (managed) | [`repositories/kms.go`](repositories/kms.go) | _(always compiled)_ | _pending_ — see [`KMS.md`](KMS.md) |
+| `pqc` | Reader (unmanaged) | [`repositories/pqc.go`](repositories/pqc.go) | _(always compiled)_ | _pending_ |
+| `wireguard-netlink` | Writer | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go) | _(default)_ / `wireguard_netlink` | _pending_ |
+| `wireguard-mikrotik` | Writer | [`repositories/wireguard-mikrotik.go`](repositories/wireguard-mikrotik.go) | `wireguard_mikrotik` | [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md) |
+
+---
+
+## Code Map
+
+| Concern | Port (service) | Adapter interface | Adapters (repositories) |
+|---|---|---|---|
+| Read keys | [`services/keyreader.go`](services/keyreader.go) `KeyReaderService` | `KeyReaderManaged`, `KeyReaderUnmanaged` | [`repositories/kms.go`](repositories/kms.go), [`repositories/pqc.go`](repositories/pqc.go) |
+| Write keys | [`services/keywriter.go`](services/keywriter.go) `KeyWriterService` | `keyWriterRepository` (`SetPSK`, `InvalidateTunnel`) | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go), [`repositories/wireguard-mikrotik.go`](repositories/wireguard-mikrotik.go) |
+
+---
+
+## Naming and File Layout Conventions
+
+A module called `<module-name>` (lower-case, dash-separated) occupies a fixed
+set of paths. Following them is what makes a module discoverable:
+
+| Path | Purpose | Build-tagged? |
+|---|---|---|
+| `repositories/<module-name>.go` | The adapter — all backend logic | **No** — always compiled |
+| `repositories/<module-name>_test.go` | Adapter unit tests | **No** — always run |
+| `<moduletag>.go` (repo root) | Wiring: the `getKeyWriterService` factory | **Yes** (writers only) |
+| `docs/<module-name>.md` | The module's single document | — |
+
+Two rules follow from that table and are worth stating explicitly:
+
+1. **The adapter is never build-tagged.** Only the root wiring file carries a
+   build constraint. This keeps every adapter compiled, tested, vetted and
+   linted on every ordinary `go test ./...` run, regardless of which backend
+   the shipped binary selects.
+2. **Backend-specific configuration is read in the wiring file**, not in
+   [`config/config.go`](config/config.go). The shared `config.Config` stays
+   transport-agnostic; a backend that needs a URL, credentials or a CA bundle
+   reads them from the environment behind its own build tag.
+
+Build tags use the `wireguard_<backend>` form (underscores — Go build tags
+cannot contain dashes), while file and document names use dashes.
+
+---
+
+## Key Readers (runtime-selected)
+
+The reader service distinguishes two flavours of source:
+
+| Flavour | Interface | Semantics | Example backend |
+|---|---|---|---|
+| **Managed** | `KeyReaderManaged` | Keys carry an ID. `GetNewKey()` returns `(keyID, key)`; the peer can later fetch the same key with `GetKeyByID(keyID)`. | QKD via KMS (ETSI GS QKD 014) |
+| **Unmanaged** | `KeyReaderUnmanaged` | Keys have no ID. `GetNewKey()` returns only the key. | PQC key file |
+
+```go
+// services/keyreader.go
+type KeyReaderUnmanaged interface {
+    GetNewKey() (key []byte, err error)
+}
+
+type KeyReaderManaged interface {
+    GetNewKey() (keyID string, key []byte, err error)
+    GetKeyByID(keyID *string) (key []byte, err error)
+}
+```
+
+Readers return **raw key bytes**, not base64. `KeyReaderService` wraps them
+into a [`models.Key`](models/) and tags it managed or unmanaged; the base64
+encoding happens once, in `setPSK`, immediately before handing the PSK to the
+writer.
+
+All readers are compiled into every binary and are wired in
+[`keyreader.go`](keyreader.go) (`getQKDService`, `getPQCService`). Which key
+material actually ends up in the PSK is decided **at runtime** by the `MODE`
+and `PQC_PSK_FILE` configuration — no rebuild required. This is appropriate
+because the existing backends are lightweight (an HTTP client and a file
+reader) and users routinely switch modes on the same binary.
+
+### Adding a new key reader
+
+1. **Write the adapter** at `repositories/<module-name>.go` implementing either
+   `KeyReaderManaged` or `KeyReaderUnmanaged`. Handle key material carefully:
+   decode inside a `secret.Do(...)` block and `clear()` every intermediate
+   buffer, as [`repositories/pqc.go`](repositories/pqc.go) does.
+2. **Add a constructor** `New<Backend>Repository(...)` that takes everything it
+   needs as arguments — no global state, no direct `os.Getenv` in the adapter.
+3. **Wire it** in [`keyreader.go`](keyreader.go) with a `get<Backend>Service`
+   function that assigns the adapter to the matching interface variable and
+   passes it to `services.NewKeyReaderService`.
+4. **Select it at runtime** from a `config.Config` field, following the pattern
+   `cfg.UsePQC()` establishes — a reader is enabled by configuration, not by a
+   build tag.
+5. **Test** the adapter with `httptest` (network backends) or a `t.TempDir()`
+   fixture (file backends).
+6. **Document it** at `docs/<module-name>.md` and add a row to the
+   [Module Index](#module-index).
+
+---
+
+## Key Writers (compile-time-selected via build tags)
+
+Unlike readers, only **one** key writer is compiled into any given binary, and
+the choice is made with a Go **build tag**. This keeps each binary minimal and
+platform-appropriate: the netlink writer assumes a local WireGuard kernel
+module, while a remote-API writer talks over HTTPS and needs neither.
+Compile-time selection means the unused backend's code and any of its
+dependencies are simply not part of the shipped binary.
+
+Every writer adapter implements the same two-method contract:
+
+```go
+// services/keywriter.go
+type keyWriterRepository interface {
+    InvalidateTunnel() error // Invalidate the WireGuard session by setting a random PSK
+    SetPSK(psk string) error // Set the PSK on the WireGuard interface
+}
+```
+
+**Contract notes for implementers:**
+
+- `psk` arrives **base64-encoded** — 32 raw bytes, standard encoding. Pass it
+  through as-is unless the backend needs another representation.
+- `SetPSK` must be **idempotent and re-resolving**. It is called on every
+  rotation interval, so resolve the target peer on each call rather than
+  caching a handle or an internal id that a backend restart may invalidate.
+- `InvalidateTunnel` is the **fail-safe**. `setPSK` in [`main.go`](main.go)
+  calls it whenever no valid key material is available, and it must tear the
+  session down by installing a fresh random 32-byte PSK. Generate it from
+  `crypto/rand` (or the backend's own key generator) — never a fixed value.
+- Errors are surfaced and logged by the caller; return wrapped errors with
+  enough context to identify the interface and peer.
+
+### The build-tag mechanism
+
+The mechanism is a single factory function, `getKeyWriterService(cfg)`, that is
+**defined in exactly one file**, chosen by build constraint:
+
+| File | Build constraint |
+|---|---|
+| [`wireguardnetlink.go`](wireguardnetlink.go) | `//go:build wireguard_netlink \|\| !wireguard_mikrotik` |
+| [`wireguardmikrotik.go`](wireguardmikrotik.go) | `//go:build wireguard_mikrotik` |
+
+`main.go` calls `getKeyWriterService(cfg)` without knowing which file provides
+it. The constraints are designed so that netlink is the **default** and so that
+you can never accidentally compile two writers at once:
+
+| `-tags` passed | netlink file included? | mikrotik file included? | Result |
+|---|:---:|:---:|---|
+| _(none)_ | ✅ (`!wireguard_mikrotik`) | ❌ | **netlink** (default) |
+| `wireguard_netlink` | ✅ | ❌ | **netlink** (explicit) |
+| `wireguard_mikrotik` | ❌ | ✅ | **mikrotik** |
+| `wireguard_netlink wireguard_mikrotik` | ✅ | ✅ | ❌ **compile error** — `getKeyWriterService redeclared` |
+
+The last row is intentional: requesting both backends is a mistake, and the
+duplicate-symbol error catches it at build time rather than silently picking one.
+
+### Adding a new key writer
+
+1. **Write the adapter** at `repositories/<module-name>.go` implementing
+   `SetPSK` and `InvalidateTunnel` as described above. Do **not** put a build
+   tag on this file. Take the HTTP client (or equivalent transport) as a
+   constructor argument so that TLS trust and timeouts are configured once, at
+   the wiring layer.
+
+2. **Add the wiring file** at the repo root, named after the tag, e.g.
+   `wireguardfoo.go`:
+
+   ```go
+   //go:build wireguard_foo
+
+   package main
+
+   func getKeyWriterService(cfg *config.Config) (*services.KeyWriterService, error) {
+       // read backend-specific env vars here, build the transport,
+       // then: return services.NewKeyWriterService(repo), nil
+   }
+   ```
+
+   Fail fast: return a descriptive error for every missing mandatory setting
+   rather than letting the first key rotation discover it.
+
+3. **Update the default constraint.** So that exactly one writer compiles, add
+   your tag to the *negated* clause of the netlink default in
+   [`wireguardnetlink.go`](wireguardnetlink.go):
+
+   ```go
+   //go:build wireguard_netlink || (!wireguard_mikrotik && !wireguard_foo)
+   ```
+
+4. **Add tests** at `repositories/<module-name>_test.go`. For a network
+   backend, stand up an `httptest.Server` that impersonates the remote API and
+   assert on the requests the adapter makes — see
+   [`repositories/wireguard-mikrotik_test.go`](repositories/wireguard-mikrotik_test.go)
+   for a worked example, including the check that `InvalidateTunnel` produces a
+   fresh 32-byte key on each call.
+
+5. **Verify the wiring compiles.** `go test ./...` and `golangci-lint` run
+   against the **default (netlink) build**, so a tagged wiring file is not
+   covered by them. Check it explicitly:
+
+   ```bash
+   GOEXPERIMENT=runtimesecret go vet -tags wireguard_foo ./...
+   GOEXPERIMENT=runtimesecret go build -tags wireguard_foo .
+   ```
+
+   And confirm the safety net still fires — this must fail with a duplicate
+   `getKeyWriterService`:
+
+   ```bash
+   GOEXPERIMENT=runtimesecret go build -tags "wireguard_netlink wireguard_foo" .
+   ```
+
+6. **Document it** at `docs/<module-name>.md` and add a row to the
+   [Module Index](#module-index).
+
+7. **Optionally add a Makefile target** mirroring `build-mikrotik`. This is a
+   convenience only — the generic form below always works without touching the
+   [`Makefile`](Makefile).
+
+---
+
+## Building a Selected Backend
+
+The [`Makefile`](Makefile) exposes the writer tag through the `BUILD_TAGS`
+variable, so any backend can be built without editing it:
+
+```bash
+make                                       # netlink (default)
+make build BUILD_TAGS=wireguard_mikrotik   # generic form — works for any tag
+make build-netlink                         # netlink (convenience target)
+make build-mikrotik                        # mikrotik (convenience target)
+```
+
+Equivalently, with `go build` directly:
+
+```bash
+GOEXPERIMENT=runtimesecret go build .                             # netlink (default)
+GOEXPERIMENT=runtimesecret go build -tags wireguard_mikrotik .    # mikrotik
+```
+
+> **`GOEXPERIMENT=runtimesecret` is mandatory for every `go` command** —
+> `build`, `test` and `vet` alike. Arnika imports `runtime/secret` to keep key
+> material out of memory dumps, and without the experiment enabled the build
+> fails with `build constraints exclude all Go files in .../runtime/secret`.
+> The `Makefile` sets it for you; export it once in a shell that runs `go`
+> directly. `golangci-lint` needs no env var — [`.golangci.yml`](.golangci.yml)
+> already carries the `goexperiment.runtimesecret` build tag.
+
+The build is pure Go (`CGO_ENABLED=0`), so any platform can be targeted by
+setting `GOOS`/`GOARCH` — no cross C-toolchain is required. The version string
+is stamped into `main.Version` at link time with `-X 'main.Version=…'` (the
+`Makefile` derives it from `git describe --tags --always`). Which tag a binary
+was built with can be read back with `go version -m <binary>`.
+
+```bash
+# Linux arm64, tag from the module's own document, version from git describe
+GOOS=linux GOARCH=arm64 make build BUILD_TAGS=wireguard_mikrotik
+
+# Same, with an explicit version override
+GOOS=linux GOARCH=arm64 VERSION=v2.0.0a make build BUILD_TAGS=wireguard_mikrotik
+```
+
+Per-backend build recipes, including the exact output names and any
+backend-specific constraints, belong in `docs/<module-name>.md`.
+
+---
+
+## Module Checklist
+
+Before considering a module done:
+
+- [ ] Adapter at `repositories/<module-name>.go`, **without** a build tag
+- [ ] Constructor takes all dependencies as arguments (no global state)
+- [ ] Key material cleared with `clear()` / handled inside `secret.Do(...)`
+- [ ] Writers: `SetPSK` re-resolves its target on every call
+- [ ] Writers: `InvalidateTunnel` installs a fresh random 32-byte PSK
+- [ ] Wiring file added, and the netlink default constraint updated (writers)
+- [ ] Backend config read in the wiring file, not in `config.Config`
+- [ ] Tests at `repositories/<module-name>_test.go` pass under `go test ./...`
+- [ ] `go vet -tags <tag> ./...` and `go build -tags <tag> .` pass
+- [ ] Every `go` command above run with `GOEXPERIMENT=runtimesecret`
+- [ ] Building with two writer tags still fails with a duplicate symbol
+- [ ] `docs/<module-name>.md` written
+- [ ] Row added to the [Module Index](#module-index)
+
+---
+
+## References
+
+- Key exchange protocol flow: [`CODEFLOW.md`](CODEFLOW.md)
+- KMS / QKD integration: [`KMS.md`](KMS.md)
+- Security model and key handling: [`SECURITY.md`](SECURITY.md)
+- Deployment: [`INSTALL.md`](INSTALL.md)
+- Go build constraints: <https://pkg.go.dev/cmd/go#hdr-Build_constraints>

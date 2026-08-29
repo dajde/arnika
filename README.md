@@ -8,6 +8,10 @@
     <h1> Arnika - Quantum secure VPN</h1>
 </div>
 
+> [!NOTE]
+> Note: The new version 2.x, is already available on the main branch, but the documentation may lag behind.
+> For classic Arnika, use the 1.x branch.
+
 **Arnika** is a compact, **lightweight external extension for Wireguard VPN**, engineered to incorporate symmetric keys as Pre-Shared Keys (**PSK**) into Wireguard. This integration ensures the establishment of a quantum-secure VPN (safeguarding against compromise of session keys).
 
 It gathers a 256-bit symmetric encryption key from a Key Management System (**KMS**) within a Quantum Key Distribution (**QKD**) infrastructure, shares the associated key ID with an Arnika peer, and configures an additional Pre-Shared Key (**PSK**) for Wireguard using the obtained key material.
@@ -87,9 +91,9 @@ QKD/PQC operation on **Layer 3** offers several notable advantages:
 * unaffected by patent "Method of integrating QKD with IPSec" (US7602919B2,CN101142779A,...)
 
 
-# Improvements since v1.x
+# Improvements since v2.x (>v1.x)
 
-- Hexagonal Architecture (Ports & Adapters) provides capability to develop own key-reader and key-writer adapters
+- Hexagonal Architecture (Ports & Adapters) provides capability to develop own key-reader and key-writer adapters - see [`KEYCONTROL.md`](KEYCONTROL.md) for details.
 - symmetric-PSK based (_quantum secure_) mutual authentication of Arnika peers - (HMAC-SHA256 + AES-256-GCM authenticated UDP protocol)
 - Arnika listening port is undetectable and unscannable, like wireguard
 - Per-IP UDP rate limiting against flood/DoS attempts
@@ -122,7 +126,7 @@ For further installation instructions, refer to the PQC key provider.
 Version >1.22 => `golang-1.22`
 
 
-# Limitations
+# Limitations for version v1.x (<v2.x)
 
 > [!IMPORTANT]
 > **ARNIKA** is intended to supply a **PSK** exclusively to a local WireGuard instance.
