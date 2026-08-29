@@ -79,7 +79,7 @@ flowchart LR
 |---|---|---|---|---|
 | `kms` | Reader (managed) | [`repositories/kms.go`](repositories/kms.go) | _(always compiled)_ | _pending_ — see [`KMS.md`](KMS.md) |
 | `pqc` | Reader (unmanaged) | [`repositories/pqc.go`](repositories/pqc.go) | _(always compiled)_ | _pending_ |
-| `wireguard-netlink` | Writer | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go) | _(default)_ / `wireguard_netlink` | _pending_ |
+| `wireguard-netlink` | Writer | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go) | _(default)_ / `wireguard_netlink` | [`docs/wireguard-netlink.md`](docs/wireguard-netlink.md) |
 | `wireguard-mikrotik` | Writer | [`repositories/wireguard-mikrotik.go`](repositories/wireguard-mikrotik.go) | `wireguard_mikrotik` | [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md) |
 
 ---
