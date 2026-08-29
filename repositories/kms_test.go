@@ -27,13 +27,13 @@ func newTestRepo(baseURL string, maxRetries int) *HTTPKMSRepository {
 func busyKMS(status int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
-		fmt.Fprint(w, `{"keys":[]}`)
+		_, _ = fmt.Fprint(w, `{"keys":[]}`)
 	}))
 }
 
 func okKMS() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"keys":[{"key_ID":"3ac4b1f2-0000-4000-8000-000000000001","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]}`)
+		_, _ = fmt.Fprint(w, `{"keys":[{"key_ID":"3ac4b1f2-0000-4000-8000-000000000001","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]}`)
 	}))
 }
 
@@ -115,10 +115,10 @@ func TestKMSRequestRetriesUntilTheKMSRecovers(t *testing.T) {
 		calls++
 		if calls < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, `{"keys":[]}`)
+			_, _ = fmt.Fprint(w, `{"keys":[]}`)
 			return
 		}
-		fmt.Fprint(w, `{"keys":[{"key_ID":"3ac4b1f2-0000-4000-8000-000000000002","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]}`)
+		_, _ = fmt.Fprint(w, `{"keys":[{"key_ID":"3ac4b1f2-0000-4000-8000-000000000002","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]}`)
 	}))
 	defer srv.Close()
 
