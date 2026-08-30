@@ -100,6 +100,23 @@ QKD/PQC operation on **Layer 3** offers several notable advantages:
 - Memory hardening — key material is explicitly zeroed after use (`runtime/secret`)
 - KMS request retry with exponential backoff for resilience
 
+# Live Demo
+
+A public, interactive demo using Arnika end to end is available at **[PQC-QKD Hybrid PoC](https://pqc-qkd-hybrid.daemons.jp/)**, built and operated by **Amon Koike**.
+
+The **PQC-QKD Hybrid PoC** implements a three-layer hybrid QKD-PQC key model:
+
+1. **QKD layer** — a `bb84-kme` simulator delivers QKD keys over an ETSI GS QKD 014 interface.
+2. **PQC layer** — a PQC sidecar on each node produces post-quantum keys (Classic McEliece 460896 + Kyber512).
+3. **Transport layer** — Arnika fuses both key sources with `HKDF-SHA3-256` (QKD ‖ PQC) and installs the result through its key-writer adapters.
+
+Two VPN lanes consume the fused key in parallel:
+
+- **WireGuard**, where the key is installed as a preshared key and enters the `Noise_IKpsk2` chaining key (ChaCha20-Poly1305).
+- **IPsec/IKEv2** via strongSwan's VICI socket, where the key is used as an RFC 8784 Post-quantum Preshared Key alongside RFC 9370 ML-KEM-768 (AES-GCM-256).
+
+The **Console** section exposes live views of the layered architecture, container status, BB84 key generation, key flow, network topology, benchmarks, physics parameters, a PQC validator, verification runs and hardware-in-the-loop tests. Key rotation is configured at 30 seconds.
+
 
 ---
 
@@ -385,6 +402,7 @@ Refer to [WireGuard](https://www.wireguard.com/) Homepage [https://www.wireguard
 
 Many thanks to the [**Rosenpass**](https://github.com/rosenpass/rosenpass) project.
 
+
 ## QCI-CAT
 
 Building on the long research experience of Austrian institutions in the field of quantum technologies, the project [QCI-CAT](https://qci-cat.at/) aims at an adoption of modern encryption technology based on QKD for highly secure communication between public authorities.
@@ -403,6 +421,14 @@ This project has received funding from the [DIGITAL-2021-QCI-01 Digital European
 The institute takes a leading position in the Austrian innovation system and a key role in Europe.
 With its expertise of handling large EU quantum communication projects such as [OPENQKD](https://openqkd.eu/), [AIT](https://www.ait.ac.at/) will coordinate [QCI-CAT](https://qci-cat.at/) from an administrative point, as well as act as the technical manager and project lead.
 
+
+## Amon Koike
+
+Special thanks to **Amon Koike** for:
+
+- building, hosting and maintaining a live demo page **[PQC-QKD Hybrid PoC](https://pqc-qkd-hybrid.daemons.jp/)**,
+- extensive testing of Arnika against real WireGuard and strongSwan deployments,
+- and his collaboration on the Arnika project.
 
 
 ## Status
