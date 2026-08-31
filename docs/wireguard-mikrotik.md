@@ -505,9 +505,17 @@ When two Arnika instances form a pair, these differ per node:
 | Env var | Meaning |
 |---|---|
 | `SERVER_ADDRESS` | The **peer** Arnika's `LISTEN_ADDRESS` |
-| `ARNIKA_ID` | Decides which side is PRIMARY for a given interval — must not be shared |
+| `ARNIKA_ID` | Decides which side is PRIMARY for a given interval. Set it explicitly on both nodes, and give the two values **different parity** — one odd, one even. Only the lowest bit is used, so two odd or two even IDs make both nodes pick the same role in every interval |
 | `WIREGUARD_PEER_PUBLIC_KEY` | The **other** router's public key |
 | `MIKROTIK_URL` | Each node points at its **own** router |
+
+And these must be **identical** on both nodes:
+
+| Env var | Meaning |
+|---|---|
+| `ARNIKA_PSK` | Shared secret authenticating and encrypting the peer channel. Must be set — with it unset the channel keys derive from the empty string and provide no protection |
+| `INTERVAL` | Roles are elected per interval number, so differing intervals drift the two nodes apart |
+| `MODE` | Both sides must agree on which key sources are mandatory |
 
 ### Step 5 — Create and start
 

@@ -9,8 +9,8 @@
 </div>
 
 > [!NOTE]
-> Note: The new version 2.x, is already available on the main branch, but the documentation may lag behind.
-> For classic Arnika, use the 1.x branch.
+> Note: The new version `v2.x`, is already available on the main branch, but the documentation may lag behind.
+> For classic Arnika, use the `v1.x` branch.
 
 **Arnika** is a compact, **lightweight external extension for Wireguard VPN**, engineered to incorporate symmetric keys as Pre-Shared Keys (**PSK**) into Wireguard. This integration ensures the establishment of a quantum-secure VPN (safeguarding against compromise of session keys).
 
@@ -21,7 +21,7 @@ Arnika offers an additional security layer for cryptography enthusiasts. It can 
 
 Arnika integrates with WireGuard to establish quantum-resistant VPN connections, adding a significant layer of security to your communication
 
-Arnika has been developed in scope of EU **EUROQCI** / **QCI-CAT** research program for the Use-Case **HSM BACKUP USING QKD** - https://qci-cat.at/hsm-backup-using-qkd
+Arnika v1.x has been developed in scope of EU **EUROQCI** / **QCI-CAT** research program for the Use-Case **HSM BACKUP USING QKD** - https://qci-cat.at/hsm-backup-using-qkd
 
 ## Contact
 
@@ -58,6 +58,16 @@ The setup supports 3 operational modes, A, B, and C
 * (B) ... PQC mode
 * (C) ... QKD+PQC hyprid mode
 
+At runtime the mode is selected with the `MODE` environment variable, which expresses what Arnika
+is allowed to fall back to if one key source fails:
+
+| Mode | `MODE` value | Key sources | Behaviour |
+|---|---|---|---|
+| (A) QKD | `AtLeastQkdRequired` _(default)_ | QKD, PQC optional | QKD key is mandatory; PQC is mixed in when `PQC_PSK_FILE` is set |
+| (B) PQC | `AtLeastPqcRequired` | PQC, QKD optional | PQC key is mandatory (`PQC_PSK_FILE` must be set) |
+| (C) hybrid | `QkdAndPqcRequired` | QKD **and** PQC | Both keys mandatory — no fallback, the strictest mode |
+| — | `EitherQkdOrPqcRequired` | QKD **or** PQC | Either source alone is accepted; the weakest mode |
+
 Regardless of the selected mode, WireGuard always receives a single 256bit (32byte) key as PSK which is used for WireGuard internal `MixKeyAndHash()` using **HKDF**.
 
 _Figure 3_ shows the key path of 2 interconnected sites for the hyprid mode (C) (QKD+PQC). In this scenario, the **KEY-CONTROL function** serves as a control entity, responsible for obtaining a **key** and transferring it to the encryption function (WireGuard).
@@ -81,7 +91,7 @@ The specific derivation function, whether **HKDF** or an alternative, is a topic
 
 ## Portability
 
-Arnika is based on hexagonal architecture (Ports and Adapters) and provides the capability to develop custom key-reader and key-writer adapters. See [`KEYCONTROL.md`](KEYCONTROL.md) for details.
+Arnika, as of v2.x, is based on hexagonal architecture (Ports and Adapters) and provides the capability to develop custom key-reader and key-writer adapters. See [`KEYCONTROL.md`](KEYCONTROL.md) for details.
 
 <table border="0" cellpadding="0" cellspacing="0" width="100%">
   <tr>
@@ -153,10 +163,27 @@ For further installation instructions, refer to the PQC key provider.
 
 ### golang version
 
-Version >1.22 => `golang-1.22`
+Go **1.26 or newer** is required (see `go.mod`).
+
+> [!IMPORTANT]
+> Arnika uses the `runtime/secret` package for memory hardening, which is gated behind a Go
+> experiment. **Every `go` command must be run with `GOEXPERIMENT=runtimesecret`:**
+>
+> ```bash
+> GOEXPERIMENT=runtimesecret go build .
+> GOEXPERIMENT=runtimesecret go test ./...
+> ```
+>
+> `make build` sets it for you. Building without it fails on the `runtime/secret` import.
 
 
 # Limitations for version v1.x (<v2.x)
+
+> [!IMPORTANT]
+> This section describes **v1.x** only. In v2.x the key writer is an adapter (see
+> [`KEYCONTROL.md`](KEYCONTROL.md)), so the same-host restriction applies to the default netlink
+> key writer, not to Arnika as a whole, the MikroTik key writer can install the PSK on a **remote** or **local** 
+> RouterOS router over the REST API.
 
 > [!IMPORTANT]
 > **ARNIKA** is intended to supply a **PSK** exclusively to a local WireGuard instance.
@@ -170,31 +197,47 @@ Version >1.22 => `golang-1.22`
 
 ---
 
+# Documentation
+
+| Document | Contents |
+|---|---|
+| [`KEYCONTROL.md`](KEYCONTROL.md) | Developer guide for the key reader / key writer layer |
+| [`docs/`](docs/) | One document per key reader / key writer backend |
+| [`CODEFLOW.md`](CODEFLOW.md) | The inter-peer key exchange protocol, step by step |
+| [`KMS.md`](KMS.md) | The bundled ETSI GS QKD 014 KMS simulator |
+| [`SECURITY.md`](SECURITY.md) | Security policy, threat scope, deployment checklist |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution guidelines |
+| [`INSTALL.md`](INSTALL.md) | Step-by-step deployment guide: Ubuntu, build from source, systemd, two peers |
+
+---
 
 # Install golang
 
-## Ubuntu 22.04.x
+Arnika requires **Go 1.26+**. Distribution packages are usually older than that, so install the
+official toolchain from [go.dev/dl](https://go.dev/dl/):
+
+## Ubuntu / Debian (amd64)
 
 ```bash
-apt install golang-1.22
-export PATH=/usr/lib/go-1.22/bin/:$PATH
+GOVER=1.26.0            # or any newer 1.26+ release
+curl -fsSLO https://go.dev/dl/go${GOVER}.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GOVER}.linux-amd64.tar.gz
+export PATH=/usr/local/go/bin:$PATH
 ```
 
 ```shell
 $ go version
-go version go1.22.2 linux/amd64
+go version go1.26.0 linux/amd64
 ```
 
-
-
 > [!CAUTION]
-> The default golang version shipped with Ubuntu 22.04 is outdated and does not meet the requirements. Install and use `golang-1.22` instead.
+> The golang version shipped by older distributions does not meet the requirements. Building with
+> a too-old toolchain fails while reading `go.mod`:
 > ```shell
-> $ apt install golang-go
 > $ go version
 > go version go1.18.1 linux/amd64
 > $ make build
-> /home/arnika/arnika/go.mod:3: invalid go version '1.22.1': > must match format 1.23
+> /home/arnika/arnika/go.mod:3: invalid go version '1.26': must match format 1.23
 > ```
 
 
@@ -225,72 +268,91 @@ make build
 ```shell
 nean@qcicat01:~/arnika$ make build
 Building arnika
-CGO_ENABLED=0 go build -trimpath -ldflags "-w -s -extldflags=-Wl,-Bsymbolic -X 'main.Version=v0.2.0-14-gd429061' -X 'main.APPName=arnika'" -o build/arnika .
-go: downloading golang.org/x/crypto v0.8.0
-go: downloading golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
-go: downloading golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b
-go: downloading github.com/mdlayher/genetlink v1.3.2
-go: downloading github.com/mdlayher/netlink v1.7.2
-go: downloading golang.org/x/sys v0.7.0
-go: downloading golang.org/x/net v0.9.0
-go: downloading github.com/josharian/native v1.1.0
-go: downloading github.com/mdlayher/socket v0.4.1
-go: downloading golang.org/x/sync v0.1.0
+CGO_ENABLED=0 GOEXPERIMENT=runtimesecret go build -trimpath -ldflags "-w -s -extldflags=-Wl,-Bsymbolic -X 'main.Version=v2.0.0-45-g9da5031' -X 'main.APPName=arnika'"  -o build/arnika .
 ```
 
 The result is a single binary `arnika` located in the new created subdirecory `build` (`build/arnika`).
+
+`make build` selects the **netlink** key writer, which installs the PSK into a local kernel
+WireGuard interface. The key writer is chosen at compile time via build tags:
+
+```bash
+make build                                  # netlink (default)
+make build-netlink                          # netlink (explicit)
+make build-mikrotik                         # MikroTik RouterOS REST API
+make build BUILD_TAGS=wireguard_mikrotik    # same, long form
+```
+
+See [`KEYCONTROL.md`](KEYCONTROL.md) for the key writer architecture and
+[`docs/`](docs/) for the individual backends.
 
 ```shell
 ./build/arnika
 === Arnika Configuration ===
 Arnika Mode:              AtLeastQkdRequired
-Arnika Interval:          10s
+Arnika Interval:          2m0s
 Arnika ID:                9999
+Arnika PSK:               <printed in cleartext - see note below>
 Arnika Listen Address:    127.0.0.1:9999
 Arnika Peer Address:      127.0.0.1:9998
+Arnika Peer Timeout:			500ms
 KMS URL:                  http://localhost:8080/api/v1/keys/CONSA
 KMS HTTP Timeout:         10s
 KMS Backoff Max Retries:  5
 KMS Backoff Base Delay:   100ms
-KMS Retry Interval:       5s
+KMS Retry Interval:       1m0s
 Client Certificate:       (not configured)
 Private Key:              (not configured)
 CA Certificate:           (not configured)
 PQC key provider:        DISABLED
 WireGuard Interface:      qcicat0
 WireGuard Peer PublicKey: ****************=
+Rate Limit:               30
+Rate Window:              1m0s
+Max Clock Skew:           1m0s
 ============================
-2026/01/22 18:04:40.628630 [INFO] MASTER[9999] [REQ] request QKD key from http://localhost:8080/api/v1/keys/CONSA
-2026/01/22 18:04:40.629081 [INFO] ARNIKA[9999] TCP server started on 127.0.0.1:9999
-2026/01/22 18:04:40.635236 [INFO] MASTER[9999] [SND] send key_id ffffffff-fe92-4fdc-bef3-c0cdc73ff774 to 127.0.0.1:9998
-2026/01/22 18:04:40.636669 [INFO] MASTER[9999] [OK] PSK configured on WireGuard interface: qcicat0 for peer: ****************=
+2026/01/22 18:04:40.628630 [INFO] PRIMARY[9999] [REQ] request QKD key from http://localhost:8080/api/v1/keys/CONSA
+2026/01/22 18:04:40.629081 [INFO] ARNIKA[9999] UDP server started on 127.0.0.1:9999
+2026/01/22 18:04:40.635236 [INFO] PRIMARY[9999] [SND] send key_id ffffffff-fe92-4fdc-bef3-c0cdc73ff774 to 127.0.0.1:9998
+2026/01/22 18:04:40.636669 [INFO] PRIMARY[9999] [OK] PSK configured on WireGuard interface: qcicat0 for peer: ****************=
 2026/01/22 18:04:43.399193 [INFO] BACKUP[9999] [RCV] received key_id ffffffff-bcec-4858-838e-623c79eabf61 from 127.0.0.1:58905
 2026/01/22 18:04:43.399195 [INFO] BACKUP[9999] [REQ] request QKD key for key_id ffffffff-bcec-4858-838e-623c79eabf61 from http://localhost:8080/api/v1/keys/CONSA
 2026/01/22 18:04:43.399760 [INFO] BACKUP[9999] [OK] PSK configured on WireGuard interface: qcicat0 for peer: ****************=
 2026/01/22 18:04:55.399323 [INFO] BACKUP[9999] [RCV] received key_id ffffffff-8a32-4540-9b78-7d4e1afebb5f from 127.0.0.1:58927
 ```
 
+> [!CAUTION]
+> The startup banner prints the value of `ARNIKA_PSK` in **cleartext**. Treat Arnika's stdout and
+> its journal as sensitive, and redact that line before sharing logs.
+
 ## compile QKD KMS simulator
 
 ```bash
 git clone git@github.com:arnika-project/arnika.git
-cd arnika/tools
-go mod tidy
-go build -o kms
+cd arnika
+go build -o build/kms ./tools
 ```
 
-The result is a single binary `kms` located in the new created subdirecory `tools` (`tools/kms`). If build without `-o` was used, it is recommended to rename it eg. to `kms` (`mv tools/tools tools/kms`).
+The result is a single binary `kms` located in the `build` subdirectory (`build/kms`). The
+simulator does not use `runtime/secret`, so `GOEXPERIMENT` is not required to build it.
 
 > [!Note]
-> **kms** aka `mock` is designed to test **Arnika**, it is **NOT** a full featured ETSI014 Simulator.
+> **kms** aka `mock` was originally designed to test **Arnika** and not intended to be a certified ETSI014 Simulator.
+> 
+> However, since v2.x the KMS Simulator is compliant to the ETSI014 standard and can be tested with [ci/test-kms.sh](ci/test-kms.sh).
+> It has been sucessfully tested with commercial security appliances from various vendors auch as like from **Palo Alto** or **MikroTik**. For more details contact quantum@xbc-digital.com
 >
-> pseudo values are used, if adoption is required please consider change the source code:
-> * listening port is `8080`
-> * `http` only
+> 
+> pseudo values are used:
+> * `http` only, no TLS
 > * `CONSA` and `CONSB` as **SAE**
 > * `key` and `key_ID`
 > * key `size=256`
 > * key `number=1`
+>
+> The listen address and debug logging are configurable — `LISTEN=host:port` (default `:8080`) and
+> `DEBUG=true`. Everything else requires a source change. See [`KMS.md`](KMS.md) for the full
+> endpoint matrix, ETSI GS QKD 014 compliance notes and test requests.
 
 
 
@@ -324,6 +386,8 @@ http_proxy=http://127.0.0.1:8080 \
 no_proxy=127.0.0.1 \
 LISTEN_ADDRESS=127.0.0.1:9999 \
 SERVER_ADDRESS=127.0.0.1:9998 \
+ARNIKA_ID=9999 \
+ARNIKA_PSK="<same shared secret on both peers>" \
 INTERVAL=120s \
 KMS_URL="http://localhost:8080/api/v1/keys/CONSA" \
 WIREGUARD_INTERFACE=qcicat0 \
@@ -339,6 +403,8 @@ http_proxy=http://127.0.0.1:8080 \
 no_proxy=127.0.0.1 \
 LISTEN_ADDRESS=127.0.0.1:9998 \
 SERVER_ADDRESS=127.0.0.1:9999 \
+ARNIKA_ID=9998 \
+ARNIKA_PSK="<same shared secret on both peers>" \
 INTERVAL=120s \
 KMS_URL="http://localhost:8080/api/v1/keys/CONSB" \
 WIREGUARD_INTERFACE=qcicat0 \
@@ -349,27 +415,75 @@ build/arnika
 
 # Configuration
 
-Arnika must be configured via environment variables, following are available:
+Arnika must be configured via environment variables. Defaults below are the values from
+[`config/config.go`](config/config.go); variables marked ✅ have no default and Arnika refuses to
+start without them.
 
-| Variable                  | Description                                                                                                  | Example                                  |
-|---------------------------|--------------------------------------------------------------------------------------------------------------|------------------------------------------|
-| LISTEN_ADDRESS            | IP address and port where Arnika listens for incoming connections                                            | 127.0.0.1:9998                           |
-| SERVER_ADDRESS            | IP address and port of the remote Arnika peer to connect to                                                  | 127.0.0.1:9998                           |
-| CERTIFICATE               | File path to the TLS certificate used for secure communication                                               | /etc/ssl/certs/arnika.crt                |
-| PRIVATE_KEY               | File path to the private key corresponding to the TLS certificate                                            | /etc/ssl/private/arnika.key              |
-| CA_CERTIFICATE            | File path to the CA certificate bundle for verifying peer certificates                                       | /etc/ssl/certs/ca-bundle.crt             |
-| KMS_HTTP_TIMEOUT          | Timeout duration for HTTP requests to the KMS (ETSI014)                                                      | 10s                                      |
-| KMS_URL                   | URL endpoint of the ETSI014 QKD Key Management System                                                        | https://localhost:8080/api/v1/keys/CONSA |
-| KMS_BACKOFF_MAX_RETRIES   | Maximum number of retry attempts for failed KMS requests                                                     | 5                                        |
-| KMS_BACKOFF_BASE_DELAY    | Initial delay before retrying a failed KMS request (exponential backoff applies)                             | 100ms                                    |
-| KMS_RETRY_INTERVAL        | Time interval between retry attempts after a failed KMS key request                                          | 60s                                      |
-| INTERVAL                  | Interval between regular key requests to the KMS; should align with WireGuard rekey interval                 | 120s                                     |
-| WIREGUARD_INTERFACE       | Name of the WireGuard network interface to configure                                                         | qcicat0                                  |
-| WIREGUARD_PEER_PUBLIC_KEY | Public key of the WireGuard peer for secure association                                                      | 8978940b-fb48-4ebf-ad7d-ca36a987fc32     |
-| PQC_PSK_FILE              | File path containing the PQC-generated preshared key                              | /tmpfs/pqc.psk                       |
-| MODE                      | Operation mode: "QkdAndPqcRequired", "AtLeastQkdRequired", "AtLeastPqcRequired", or "EitherQkdOrPqcRequired" | AtLeastQkdRequired                       |
-| ARNIKA_ID                 | Optional identifier (up to 5 digits); defaults to LISTEN_PORT; used for logging and identification           | 9998                                     |
+## Peer identity and inter-peer channel
 
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `LISTEN_ADDRESS` | ✅ | — | `host:port` Arnika listens on for the peer channel (UDP), e.g. `127.0.0.1:9999` |
+| `SERVER_ADDRESS` | ✅ | — | `host:port` of the remote Arnika peer — its `LISTEN_ADDRESS` |
+| `ARNIKA_PSK` | ⚠️ | _(empty)_ | Shared secret authenticating and encrypting the peer channel. **Must be identical on both peers and must be set** — see the warning below |
+| `ARNIKA_ID` | ➖ | port from `LISTEN_ADDRESS` | Identifier (max 5 digits) used in logs and in PRIMARY/BACKUP election. The two peers' values **must differ in parity** — one odd, one even |
+| `ARNIKA_PEER_TIMEOUT` | ➖ | `500ms` | Timeout waiting for the peer's ACK |
+| `INTERVAL` | ➖ | `10s` | Interval between key rotations. **Must be the same on both peers**; align with the WireGuard rekey interval (`120s`) |
+| `RATE_LIMIT` | ➖ | `30` | Max accepted packets per source IP per `RATE_WINDOW` |
+| `RATE_WINDOW` | ➖ | `1m` | Window for the per-IP rate limit |
+| `MAX_CLOCK_SKEW` | ➖ | `1m` | Accepted timestamp deviation (replay protection). Requires clocks in sync between peers |
+
+> [!WARNING]
+> `ARNIKA_PSK` has **no secure default**. If it is unset, Arnika still starts, but both the HMAC
+> and AES keys of the peer channel derive from the empty string and are computable by anyone —
+> any host able to reach `LISTEN_ADDRESS` can inject or read key IDs. Generate it with
+> `openssl rand -base64 32`, distribute it out of band, and set the same value on both peers.
+>
+> Note that the startup banner prints this value in cleartext.
+
+## Key reader — QKD / KMS (ETSI GS QKD 014)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `KMS_URL` | ✅ | — | KMS endpoint for this peer's SAE, e.g. `https://kms.example:8443/api/v1/keys/CONSA` |
+| `KMS_HTTP_TIMEOUT` | ➖ | `10s` | HTTP timeout for KMS requests |
+| `KMS_BACKOFF_MAX_RETRIES` | ➖ | `5` | Retry attempts per failed KMS request |
+| `KMS_BACKOFF_BASE_DELAY` | ➖ | `100ms` | First backoff delay; grows exponentially per retry |
+| `KMS_RETRY_INTERVAL` | ➖ | `INTERVAL / 2` | Wait before the next rotation attempt after all retries failed |
+| `CERTIFICATE` | ➖* | _(none)_ | Client certificate presented to the **KMS** |
+| `PRIVATE_KEY` | ➖* | _(none)_ | Private key for `CERTIFICATE` |
+| `CA_CERTIFICATE` | ➖* | _(none)_ | CA bundle used to verify the **KMS** certificate |
+
+> [!NOTE]
+> \* These three are **all-or-nothing**: client-certificate authentication is enabled only when
+> all three are set. If any one of them is empty, all three are ignored, and the KMS connection
+> falls back to a plain HTTPS client that validates the server against the system root store
+> (TLS 1.2 minimum). When all three are set, `CA_CERTIFICATE` *replaces* the system roots, so the
+> KMS certificate must be issued by that CA. Unreadable or invalid files abort startup.
+>
+> They apply to the KMS connection **only** — the inter-peer channel is not TLS and does not use
+> them; it is protected by `ARNIKA_PSK`.
+>
+> The KMS client honours the standard `http_proxy` / `https_proxy` / `no_proxy` environment
+> variables.
+
+## Key reader — PQC
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PQC_PSK_FILE` | ➖ | _(none)_ | File holding the PQC key from an external provider. Enables PQC when set; permissions must be `0600` or stricter, and the parent directory must not be writable by the Arnika user |
+| `MODE` | ➖ | `AtLeastQkdRequired` | `QkdAndPqcRequired`, `AtLeastQkdRequired`, `AtLeastPqcRequired` or `EitherQkdOrPqcRequired` — see the mode table above |
+
+## Key writer — WireGuard
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `WIREGUARD_INTERFACE` | ✅ | — | WireGuard interface whose peer PSK is rotated, e.g. `qcicat0`. With the MikroTik key writer this is the interface **on the router** |
+| `WIREGUARD_PEER_PUBLIC_KEY` | ✅ | — | Public key of the WireGuard peer whose PSK is rotated |
+
+The MikroTik key writer (`wireguard_mikrotik` build tag) adds `MIKROTIK_URL`,
+`MIKROTIK_USERNAME`, `MIKROTIK_PASSWORD`, `MIKROTIK_CA_CERTIFICATE`, `MIKROTIK_TLS_INSECURE` and
+`MIKROTIK_HTTP_TIMEOUT` — documented in [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md).
 
 ---
 

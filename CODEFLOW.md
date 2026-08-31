@@ -4,6 +4,11 @@
 
 This document describes the step-by-step code flow of the Arnika key exchange protocol, including a flow diagram and references to the relevant code sections.
 
+The exchange runs over **UDP** between `LISTEN_ADDRESS` and the peer's `SERVER_ADDRESS`
+(`udpserver.go`). Every packet is signed and encrypted with keys derived from the shared secret
+`ARNIKA_PSK`, which therefore must be identical on both peers — see
+[`SECURITY.md`](SECURITY.md#inter-peer-channel-authentication-arnika_psk).
+
 ---
 
 ## Flow Diagram
@@ -32,16 +37,17 @@ sequenceDiagram
 
 ### 1. **Role Calculation**
 - **Where:** `config/config.go` (`IsPrimary()` method)
-- **What:** Both nodes deterministically calculate their role (PRIMARY or BACKUP) for the current interval using HMAC-SHA256 and their ArnikaID.
+- **What:** Both nodes deterministically calculate their role (PRIMARY or BACKUP) for the current interval as `HMAC-SHA256(ARNIKA_PSK, intervalNumber)` XOR `ARNIKA_ID`, taking the lowest bit.
 - **Why:** Ensures only one node acts as PRIMARY per interval, preventing race conditions.
+- **Requires:** the same `ARNIKA_PSK` and the same `INTERVAL` on both peers, and `ARNIKA_ID` values of **different parity** — only the lowest bit of the ID enters the calculation, so two even or two odd IDs give both nodes the same role in every interval.
 
 ### 2. **PRIMARY Requests Key from KMS**
-- **Where:** Application logic (not shown in `auth.go`)
+- **Where:** `main.go`, via `services.KeyReaderService` (`repositories/kms.go`)
 - **What:** PRIMARY node requests a new key from the Key Management Server (KMS).
 - **Why:** Only PRIMARY initiates key rotation.
 
 ### 3. **KMS Returns Key**
-- **Where:** Application logic
+- **Where:** `repositories/kms.go`
 - **What:** KMS responds with the new key.
 - **Why:** PRIMARY needs the key to start the exchange.
 
@@ -56,12 +62,12 @@ sequenceDiagram
 - **Why:** Layered security — cheapest checks first, expensive decryption only after authentication passes.
 
 ### 6. **BACKUP Requests Key from KMS**
-- **Where:** Application logic
+- **Where:** `main.go` (`GetKeyByID`), `repositories/kms.go`
 - **What:** BACKUP requests the key from KMS using the key ID.
 - **Why:** Ensures both nodes have the same key.
 
 ### 7. **KMS Returns Key**
-- **Where:** Application logic
+- **Where:** `repositories/kms.go`
 - **What:** KMS responds with the key.
 - **Why:** Synchronizes key material.
 
@@ -76,19 +82,19 @@ sequenceDiagram
 - **Why:** Ensures BACKUP is synchronized.
 
 ### 10. **Both Set New Key in WireGuard**
-- **Where:** Application logic
-- **What:** Both nodes update their WireGuard PSK.
+- **Where:** `main.go` (`setPSK`), via `services.KeyWriterService` and the selected key writer adapter (`repositories/wireguard-*.go`)
+- **What:** Both nodes update their WireGuard PSK. In hybrid mode the QKD key is first combined with the PQC key via `kdf.DeriveKey` (HKDF-SHA3-256).
 - **Why:** Secure VPN communication.
 
 ---
 
 ## Security Mechanisms in Code
 
-- **HMAC-SHA256:** Used for all packet signatures (`Sign`, `Verify`).
-- **AES-256-GCM:** Used for encrypting key material (`Encrypt`, `Decrypt`).
-- **Rate Limiting:** Per-IP token bucket (30 req/min) checked before any crypto.
-- **Timestamp Validation:** ±60s window for replay protection.
-- **Zeroization:** All sensitive key material is handled inside `runtime/secret.Do` blocks to minimize memory exposure.
+- **HMAC-SHA256:** Used for all packet signatures (`Sign`, `Verify`), keyed by `ARNIKA_PSK` with domain separation (`deriveHMACKey`).
+- **AES-256-GCM:** Used for encrypting key material (`Encrypt`, `Decrypt`), keyed by `ARNIKA_PSK` (`deriveKey`).
+- **Rate Limiting:** Per-IP token bucket checked before any crypto — `RATE_LIMIT` packets per `RATE_WINDOW`, default 30 per minute.
+- **Timestamp Validation:** Replay protection over a ±`MAX_CLOCK_SKEW` window, default ±1m.
+- **Zeroization:** All sensitive key material is handled inside `runtime/secret.Do` blocks to minimize memory exposure. This requires `GOEXPERIMENT=runtimesecret` at build time.
 
 ---
 
@@ -100,7 +106,13 @@ sequenceDiagram
   See `auth/auth.go` (`Encrypt`, `Decrypt`)
 - **Signature Handling:**
   See `auth/auth.go` (`Sign`, `Verify`)
-- **Key Derivation:**
+- **Key Derivation (peer channel):**
   See `auth/auth.go` (`deriveKey`, `deriveHMACKey`)
+- **Key Derivation (hybrid QKD+PQC PSK):**
+  See `kdf/kdf.go` (`DeriveKey`, HKDF-SHA3-256)
+- **Configuration and role election:**
+  See `config/config.go` (`Parse`, `IsPrimary`) and [`README.md`](README.md#configuration)
+- **Key reader / key writer adapters:**
+  See [`KEYCONTROL.md`](KEYCONTROL.md)
 
 ---

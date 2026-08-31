@@ -1,37 +1,22 @@
-<!--
-NOTE: Documentation is generated based on an Ansible playbook.
-prompt:
-Analyze the attached Ansible playbook and directory structure.
-Generate a comprehensive, step-by-step installation manual in Markdown format named `installation.md`.
-The documentation should include:
-* All prerequisites (system requirements, dependencies, required software, etc.)
-*	Detailed, sequential manual installation instructions, clearly broken down by step
-*	Instructions on how to manually start all relevant services after installation
-    Replace any sensitive information such as keys or passwords with clear placeholders (e.g., `<YOUR_PASSWORD_HERE>`).
-*	Include all tools and scripts (eg.: those starting with init_*) that are part of the installation, with explanations of their purpose.
-* use "alice" instead of "o93" or "qcicat-o93-app01"
-* use "bob" instead of "o73" or "qcicat-o73-app02"
-* create and exlpain config files for both hosts "alice" and "bob" with appropriate placeholders for IP addresses, keys, etc.
-
-Ensure the documentation is clear, concise, and suitable for a technical audience.
-create a new file `INSTALL.md` with the content.
--->
-
 # Arnika Quantum-Secure VPN Installation Guide
 
-This guide provides step-by-step instructions for manually installing the Arnika Quantum-Secure VPN system and all its dependencies on Ubuntu systems for both "Alice" and "Bob" endpoints.
+Manual installation of Arnika and its dependencies on Ubuntu, for a pair of peers named **Alice**
+and **Bob** joined by a single WireGuard tunnel.
 
 ## Table of Contents
 
-1. Prerequisites
-2. Ubuntu System Configuration
-3. Wireguard Installation
-4. PQC provider Installation (Optional - for PQC mode)
-5. KMS Installation (Optional - for KMS mode)
-6. Arnika Installation
-7. Tools Installation
-8. Service Management
-9. Verification
+- [Arnika Quantum-Secure VPN Installation Guide](#arnika-quantum-secure-vpn-installation-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Ubuntu System Configuration](#ubuntu-system-configuration)
+  - [Wireguard Installation](#wireguard-installation)
+  - [PQC key provider Installation](#pqc-key-provider-installation)
+  - [Build from Source](#build-from-source)
+  - [KMS Installation](#kms-installation)
+  - [Arnika Installation](#arnika-installation)
+  - [Tools Installation](#tools-installation)
+  - [Service Management](#service-management)
+  - [Verification](#verification)
 
 ## Prerequisites
 
@@ -39,479 +24,601 @@ This guide provides step-by-step instructions for manually installing the Arnika
 - Root or sudo access
 - Internet connectivity
 - Pre-generated Wireguard keys for both hosts (private keys, public keys, and PSK)
+- A shared Arnika peer secret (`ARNIKA_PSK`) — one value used on **both** hosts, generated with
+  `openssl rand -base64 32`
 - (Optional) PQC keys for PQC mode
 - (Optional) KMS certificates for KMS mode
-- Arnika version v0.2.2 (current stable version)
+- Build tools to compile Arnika from source: `git`, `make` and a **Go 1.26+** toolchain — see
+  [Build from Source](#build-from-source)
+
+> [!NOTE]
+> This guide installs the default **netlink** key writer, which requires Arnika and WireGuard on
+> the same host. To rotate the PSK on a remote MikroTik router instead, build with the
+> `wireguard_mikrotik` tag and follow
+> [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md). Building from source requires
+> **Go 1.26+** and `GOEXPERIMENT=runtimesecret` — see [`KEYCONTROL.md`](KEYCONTROL.md).
 
 ## Ubuntu System Configuration
 
-Perform these steps on both Alice and Bob servers:
+Run on both Alice and Bob:
 
-1. Update the package repositories and upgrade installed packages:
+- Update the package repositories and upgrade installed packages:
 
-   ```bash
-   sudo apt update
-   sudo apt upgrade -y
-   ```
+  ```bash
+  sudo apt update
+  sudo apt upgrade -y
+  ```
 
-2. Install required packages:
+- Install required packages:
 
-   ```bash
-   sudo apt install -y net-tools iputils-ping dnsutils socat less vim tmux lsof traceroute tcptraceroute fping htop bash-completion jq iotop apt-transport-https ca-certificates curl
-   ```
+  ```bash
+  sudo apt install -y net-tools iputils-ping dnsutils socat less vim tmux lsof traceroute tcptraceroute fping htop bash-completion jq iotop apt-transport-https ca-certificates curl
+  ```
 
-3. Set the timezone:
+- Set the timezone:
 
-   ```bash
-   sudo timedatectl set-timezone Europe/Vienna
-   ```
+  ```bash
+  sudo timedatectl set-timezone Europe/Vienna
+  ```
 
-4. Configure time synchronization:
+- Configure time synchronization:
 
-   ```bash
-   # Create timesyncd configuration file
-   sudo tee /etc/systemd/timesyncd.conf > /dev/null << EOF
-   [Time]
-   NTP=ntp.ubuntu.com
-   FallbackNTP=0.ubuntu.pool.ntp.org 1.ubuntu.pool.ntp.org 2.ubuntu.pool.ntp.org 3.ubuntu.pool.ntp.org
-   EOF
+  ```bash
+  # Create timesyncd configuration file
+  sudo tee /etc/systemd/timesyncd.conf > /dev/null << EOF
+  [Time]
+  NTP=ntp.ubuntu.com
+  FallbackNTP=0.ubuntu.pool.ntp.org 1.ubuntu.pool.ntp.org 2.ubuntu.pool.ntp.org 3.ubuntu.pool.ntp.org
+  EOF
 
-   # Enable and restart the timesyncd service
-   sudo systemctl restart systemd-timesyncd.service
-   sudo timedatectl set-ntp true
-   ```
+  # Enable and restart the timesyncd service
+  sudo systemctl restart systemd-timesyncd.service
+  sudo timedatectl set-ntp true
+  ```
 
-5. Configure locale:
+- Configure locale:
 
-   ```bash
-   sudo tee /etc/default/locale > /dev/null << EOF
-   LANG="en_US.UTF-8"
-   LC_TIME="en_US.UTF-8"
-   EOF
+  ```bash
+  sudo tee /etc/default/locale > /dev/null << EOF
+  LANG="en_US.UTF-8"
+  LC_TIME="en_US.UTF-8"
+  EOF
 
-   sudo localectl set-locale LANG="en_US.UTF-8" LC_TIME="en_US.UTF-8"
-   ```
+  sudo localectl set-locale LANG="en_US.UTF-8" LC_TIME="en_US.UTF-8"
+  ```
 
 ## Wireguard Installation
 
-Perform these steps on both Alice and Bob servers:
+Run on both Alice and Bob:
 
-1. Enable IP forwarding:
+- Enable IP forwarding:
 
-   ```bash
-   sudo tee /etc/sysctl.d/99-wireguard.conf > /dev/null << EOF
-   net.ipv4.ip_forward = 1
-   net.ipv4.conf.all.forwarding = 1
-   EOF
+  ```bash
+  sudo tee /etc/sysctl.d/99-wireguard.conf > /dev/null << EOF
+  net.ipv4.ip_forward = 1
+  net.ipv4.conf.all.forwarding = 1
+  EOF
 
-   sudo sysctl -p /etc/sysctl.d/99-wireguard.conf
-   ```
+  sudo sysctl -p /etc/sysctl.d/99-wireguard.conf
+  ```
 
-2. Install Wireguard:
+- Install Wireguard:
 
-   ```bash
-   sudo apt install -y wireguard wireguard-tools
-   ```
+  ```bash
+  sudo apt install -y wireguard wireguard-tools
+  ```
 
-3. Create the Wireguard configuration files for each host:
+- Create the Wireguard configuration files for each host:
 
-   ```bash
-   # Create the wireguard directory if it doesn't exist
-   sudo mkdir -p /etc/wireguard
-   ```
+  ```bash
+  # Create the wireguard directory if it doesn't exist
+  sudo mkdir -p /etc/wireguard
+  ```
 
-   **For Alice**:
-   ```bash
-   sudo tee /etc/wireguard/qcicat0.conf > /dev/null << EOF
-   [Interface]
-   Address = 10.127.254.9/30, fdac::1/64
-   ListenPort = 44222
-   PrivateKey = <ALICE_PRIVATE_KEY>
+  **For Alice**:
+  ```bash
+  sudo tee /etc/wireguard/qcicat0.conf > /dev/null << EOF
+  [Interface]
+  Address = 10.127.254.9/30, fdac::1/64
+  ListenPort = 44222
+  PrivateKey = <ALICE_PRIVATE_KEY>
 
-   [Peer]
-   PublicKey = <BOB_PUBLIC_KEY>
-   PresharedKey = <WIREGUARD_PSK>
-   AllowedIPs = 100.127.255.210/32, 100.127.255.211/32, 10.127.254.10/32, fdac::/64
-   Endpoint = <BOB_IP>:53991
-   EOF
-   ```
+  [Peer]
+  PublicKey = <BOB_PUBLIC_KEY>
+  PresharedKey = <WIREGUARD_PSK>
+  AllowedIPs = 100.127.255.210/32, 100.127.255.211/32, 10.127.254.10/32, fdac::/64
+  Endpoint = <BOB_IP>:53991
+  EOF
+  ```
 
-   **For Bob**:
-   ```bash
-   sudo tee /etc/wireguard/qcicat0.conf > /dev/null << EOF
-   [Interface]
-   Address = 10.127.254.10/30, fdac::2/64
-   ListenPort = 53991
-   PrivateKey = <BOB_PRIVATE_KEY>
+  **For Bob**:
+  ```bash
+  sudo tee /etc/wireguard/qcicat0.conf > /dev/null << EOF
+  [Interface]
+  Address = 10.127.254.10/30, fdac::2/64
+  ListenPort = 53991
+  PrivateKey = <BOB_PRIVATE_KEY>
 
-   [Peer]
-   PublicKey = <ALICE_PUBLIC_KEY>
-   PresharedKey = <WIREGUARD_PSK>
-   AllowedIPs = 100.127.255.82/32, 100.127.255.83/32, 10.127.254.9/32, fdac::/64
-   Endpoint = <ALICE_IP>:44222
-   EOF
-   ```
+  [Peer]
+  PublicKey = <ALICE_PUBLIC_KEY>
+  PresharedKey = <WIREGUARD_PSK>
+  AllowedIPs = 100.127.255.82/32, 100.127.255.83/32, 10.127.254.9/32, fdac::/64
+  Endpoint = <ALICE_IP>:44222
+  EOF
+  ```
 
-4. Set proper permissions and secure the configuration file:
+- Set proper permissions and secure the configuration file:
 
-   ```bash
-   sudo chmod 600 /etc/wireguard/qcicat0.conf
-   ```
+  ```bash
+  sudo chmod 600 /etc/wireguard/qcicat0.conf
+  ```
 
-5. Enable and start the Wireguard service:
+- Enable and start the Wireguard service:
 
-   ```bash
-   sudo systemctl enable wg-quick@qcicat0
-   sudo systemctl start wg-quick@qcicat0
-   ```
+  ```bash
+  sudo systemctl enable wg-quick@qcicat0
+  sudo systemctl start wg-quick@qcicat0
+  ```
 
 ## PQC key provider Installation
 
-> Note: This section is only required if you want to enable Post-Quantum Cryptography (PQC) mode.
+> [!NOTE]
+> Only required for Post-Quantum Cryptography (PQC) mode.
 
-For a installation guide, refer to the external PQC key provider of your choice.
+Refer to the installation guide of your chosen PQC key provider. Arnika needs nothing from it but
+the path to the key file it writes, configured as `PQC_PSK_FILE`. The file must be `0600` or
+stricter, and its parent directory must not be writable by the Arnika user.
 
+
+## Build from Source
+
+Arnika 2.x lives on the `main` branch, so both binaries are built from source rather than
+downloaded from a release. They are statically linked and self-contained: build once per
+architecture and copy the binaries to both hosts, or repeat these steps on Alice and Bob.
+
+- Install the build dependencies. Go **1.26 or newer** is required and distribution packages are
+  usually older, so install the official toolchain:
+
+  ```bash
+  sudo apt install -y git make curl
+
+  GOVER=1.26.0        # or any newer 1.26+ release from https://go.dev/dl/
+  curl -fsSLO https://go.dev/dl/go${GOVER}.linux-amd64.tar.gz
+  sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GOVER}.linux-amd64.tar.gz
+  export PATH=/usr/local/go/bin:$PATH
+  ```
+
+  ```shell
+  $ go version
+  go version go1.26.0 linux/amd64
+  ```
+
+- Clone the repository:
+
+  ```bash
+  git clone https://github.com/arnika-project/arnika.git ~/arnika
+  cd ~/arnika
+  ```
+
+- Build Arnika:
+
+  ```bash
+  make build
+  ```
+
+  The result is `~/arnika/build/arnika`, built with the default **netlink** key writer — the PSK
+  is written into a local kernel WireGuard interface, which is what the rest of this guide
+  assumes.
+
+  > [!IMPORTANT]
+  > Arnika needs `GOEXPERIMENT=runtimesecret` for its `runtime/secret` memory hardening.
+  > `make build` sets it; a plain `go build .` fails. To rotate the PSK on a remote MikroTik
+  > router instead, build with `make build-mikrotik` and follow
+  > [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md) rather than the steps below.
+
+- Build the KMS simulator, only if you intend to use the bundled simulator instead of a real
+  ETSI GS QKD 014 KMS:
+
+  ```bash
+  go build -o build/kms ./tools
+  ```
+
+  The simulator does not use `runtime/secret`, so it needs no `GOEXPERIMENT`.
+
+- Confirm both binaries are present and self-contained:
+
+  ```bash
+  ls -l build/
+  file build/arnika build/kms      # "statically linked"
+  ```
+
+  To cross-build for another architecture (e.g. on an amd64 workstation for an arm64 host):
+
+  ```bash
+  GOOS=linux GOARCH=arm64 make build BINARY_NAME=arnika-linux-arm64
+  ```
 
 ## KMS Installation
 
-> Note: This section is only required if you want to enable KMS (Key Management System) mode.
+> [!NOTE]
+> Only required if you use the bundled KMS simulator instead of a real ETSI GS QKD 014 KMS. See
+> [`KMS.md`](KMS.md) for its endpoints and limitations.
 
-Perform these steps on both Alice and Bob servers:
+Run on both Alice and Bob:
 
-1. Create the KMS directory:
+- Create the KMS directory:
 
-   ```bash
-   sudo mkdir -p /opt/kms
-   ```
+  ```bash
+  sudo mkdir -p /opt/kms
+  ```
 
-2. Download and extract the KMS simulator:
+- Install the KMS simulator binary built in [Build from Source](#build-from-source):
 
-   ```bash
-   wget https://github.com/arnika-project/arnika/releases/download/v0.2.1/kms-v0.2.1_linux_arm64.tar.gz -O /tmp/kms.tar.gz
-   sudo tar -xzf /tmp/kms.tar.gz -C /opt/kms
-   ```
+  ```bash
+  sudo install -o root -g root -m 0755 ~/arnika/build/kms /opt/kms/kms
+  ```
 
-3. Create a symlink to the binary:
+- Create a symlink to the binary:
 
-   ```bash
-   sudo ln -sf /opt/kms/kms /usr/local/sbin/kms
-   ```
+  ```bash
+  sudo ln -sf /opt/kms/kms /usr/local/sbin/kms
+  ```
 
-4. Create a systemd service for KMS:
+- Create a systemd service for KMS:
 
-   ```bash
-   sudo tee /etc/systemd/system/kms.service > /dev/null << EOF
-   # /etc/systemd/system/kms.service
-   [Unit]
-   Description=KMS ETSI014 Simulator on http://127.0.0.1:8080
+  ```bash
+  sudo tee /etc/systemd/system/kms.service > /dev/null << EOF
+  # /etc/systemd/system/kms.service
+  [Unit]
+  Description=KMS ETSI014 Simulator on http://127.0.0.1:8080
 
-   [Service]
-   Type=simple
-   ExecStart=/opt/kms/kms
-   Restart=on-failure
+  [Service]
+  Type=simple
+  ExecStart=/opt/kms/kms
+  Restart=on-failure
 
-   [Install]
-   WantedBy=multi-user.target
-   EOF
-   ```
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+  ```
 
-5. Enable and start the KMS service:
+- Enable and start the KMS service:
 
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable kms.service
-   sudo systemctl start kms.service
-   ```
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl enable kms.service
+  sudo systemctl start kms.service
+  ```
 
 ## Arnika Installation
 
-Perform these steps on both Alice and Bob servers:
+Run on both Alice and Bob:
 
-1. Create required directories:
+- Create required directories:
 
-   ```bash
-   sudo mkdir -p /opt/arnika
-   sudo mkdir -p /opt/arnika/kms_certs
-   ```
+  ```bash
+  sudo mkdir -p /opt/arnika
+  sudo mkdir -p /opt/arnika/kms_certs
+  ```
 
-2. Download and extract Arnika:
+- Install the Arnika binary built in [Build from Source](#build-from-source):
 
-   ```bash
-   wget https://github.com/arnika-project/arnika/releases/download/v0.2.2/arnika-v0.2.2_linux_amd64.tar.gz -O /tmp/arnika.tar.gz
-   sudo tar -xzf /tmp/arnika.tar.gz -C /opt/arnika
-   ```
+  ```bash
+  sudo install -o root -g root -m 0755 ~/arnika/build/arnika /opt/arnika/arnika
+  ```
 
-3. Create a symlink to the binary:
+  To upgrade later: `git pull` in `~/arnika`, run `make build` again, then stop the service,
+  re-run this `install` command and start the service.
 
-   ```bash
-   sudo ln -sf /opt/arnika/arnika /usr/local/sbin/arnika
-   ```
+- Create a symlink to the binary:
 
-4. Copy certificates for KMS (if using KMS mode):
+  ```bash
+  sudo ln -sf /opt/arnika/arnika /usr/local/sbin/arnika
+  ```
 
-   **For Alice**:
-   ```bash
-   sudo cp <CA_CERT_FILE> /opt/arnika/kms_certs/ca.crt
-   sudo cp <ALICE_CERT_FILE> /opt/arnika/kms_certs/arnika-alice.crt
-   sudo cp <ALICE_KEY_FILE> /opt/arnika/kms_certs/arnika-alice.key
+- Copy certificates for KMS (if using KMS mode):
 
-   sudo chmod 660 /opt/arnika/kms_certs/*
-   ```
+  **For Alice**:
+  ```bash
+  sudo cp <CA_CERT_FILE> /opt/arnika/kms_certs/ca.crt
+  sudo cp <ALICE_CERT_FILE> /opt/arnika/kms_certs/arnika-alice.crt
+  sudo cp <ALICE_KEY_FILE> /opt/arnika/kms_certs/arnika-alice.key
 
-   **For Bob**:
-   ```bash
-   sudo cp <CA_CERT_FILE> /opt/arnika/kms_certs/ca.crt
-   sudo cp <BOB_CERT_FILE> /opt/arnika/kms_certs/arnika-bob.crt
-   sudo cp <BOB_KEY_FILE> /opt/arnika/kms_certs/arnika-bob.key
+  sudo chmod 644 /opt/arnika/kms_certs/*.crt
+  sudo chmod 600 /opt/arnika/kms_certs/*.key
+  ```
 
-   sudo chmod 660 /opt/arnika/kms_certs/*
-   ```
+  **For Bob**:
+  ```bash
+  sudo cp <CA_CERT_FILE> /opt/arnika/kms_certs/ca.crt
+  sudo cp <BOB_CERT_FILE> /opt/arnika/kms_certs/arnika-bob.crt
+  sudo cp <BOB_KEY_FILE> /opt/arnika/kms_certs/arnika-bob.key
 
-5. Create an environment file for Arnika:
+  sudo chmod 644 /opt/arnika/kms_certs/*.crt
+  sudo chmod 600 /opt/arnika/kms_certs/*.key
+  ```
 
-   **For Alice**:
-   ```bash
-   sudo tee /opt/arnika/arnika.env > /dev/null << EOF
-   INTERVAL="120s"
-   LISTEN_ADDRESS="<ALICE_IP>:9999"
-   SERVER_ADDRESS="<BOB_IP>:9999"
-   CERTIFICATE="/opt/arnika/kms_certs/arnika-alice.crt"
-   PRIVATE_KEY="/opt/arnika/kms_certs/arnika-alice.key"
-   CA_CERTIFICATE="/opt/arnika/kms_certs/ca.crt"
-   KMS_URL="https://<ALICE_KMS_SERVER>:7000/api/v1/keys/arnika-bob"
-   WIREGUARD_INTERFACE="qcicat0"
-   WIREGUARD_PEER_PUBLIC_KEY="<BOB_WIREGUARD_PUBLIC_KEY>"
-   # Uncomment if using PQC mode:
-   PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
-   EOF
-   ```
+- Create an environment file for Arnika:
 
-   **For Bob**:
-   ```bash
-   sudo tee /opt/arnika/arnika.env > /dev/null << EOF
-   INTERVAL="137s"  # Alice-Interval 120s + Alice KMS HTTP timeout 10s + Safety 7s => prevent flapping
-   LISTEN_ADDRESS="<BOB_IP>:9999"
-   SERVER_ADDRESS="<ALICE_IP>:9999"
-   CERTIFICATE="/opt/arnika/kms_certs/arnika-bob.crt"
-   PRIVATE_KEY="/opt/arnika/kms_certs/arnika-bob.key"
-   CA_CERTIFICATE="/opt/arnika/kms_certs/ca.crt"
-   KMS_URL="https://<BOB_KMS_SERVER>:7000/api/v1/keys/arnika-alice"
-   WIREGUARD_INTERFACE="qcicat0"
-   WIREGUARD_PEER_PUBLIC_KEY="<ALICE_WIREGUARD_PUBLIC_KEY>"
-   # Uncomment if using PQC mode:
-   PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
-   EOF
-   ```
+  **For Alice**:
+  ```bash
+  sudo tee /opt/arnika/arnika.env > /dev/null << EOF
+  INTERVAL="120s"
+  LISTEN_ADDRESS="<ALICE_IP>:9999"
+  SERVER_ADDRESS="<BOB_IP>:9999"
+  ARNIKA_ID="9999"
+  ARNIKA_PSK="<SHARED_ARNIKA_PSK>"
+  # KMS client certificate (KMS connection only - not the peer channel):
+  CERTIFICATE="/opt/arnika/kms_certs/arnika-alice.crt"
+  PRIVATE_KEY="/opt/arnika/kms_certs/arnika-alice.key"
+  CA_CERTIFICATE="/opt/arnika/kms_certs/ca.crt"
+  KMS_URL="https://<ALICE_KMS_SERVER>:7000/api/v1/keys/arnika-bob"
+  WIREGUARD_INTERFACE="qcicat0"
+  WIREGUARD_PEER_PUBLIC_KEY="<BOB_WIREGUARD_PUBLIC_KEY>"
+  # Uncomment if using PQC mode:
+  #PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
+  EOF
 
-6. Create a systemd service for Arnika:
+  sudo chmod 600 /opt/arnika/arnika.env
+  ```
 
-   ```bash
-   sudo tee /etc/systemd/system/arnika.service > /dev/null << EOF
-   # /etc/systemd/system/arnika.service
-   [Unit]
-   Description=Arnika Quantum Secure VPN
-   After=wg-quick.target
-   Requires=wg-quick.target
+  **For Bob**:
+  ```bash
+  sudo tee /opt/arnika/arnika.env > /dev/null << EOF
+  INTERVAL="120s"
+  LISTEN_ADDRESS="<BOB_IP>:9999"
+  SERVER_ADDRESS="<ALICE_IP>:9999"
+  ARNIKA_ID="9998"
+  ARNIKA_PSK="<SHARED_ARNIKA_PSK>"
+  # KMS client certificate (KMS connection only - not the peer channel):
+  CERTIFICATE="/opt/arnika/kms_certs/arnika-bob.crt"
+  PRIVATE_KEY="/opt/arnika/kms_certs/arnika-bob.key"
+  CA_CERTIFICATE="/opt/arnika/kms_certs/ca.crt"
+  KMS_URL="https://<BOB_KMS_SERVER>:7000/api/v1/keys/arnika-alice"
+  WIREGUARD_INTERFACE="qcicat0"
+  WIREGUARD_PEER_PUBLIC_KEY="<ALICE_WIREGUARD_PUBLIC_KEY>"
+  # Uncomment if using PQC mode:
+  #PQC_PSK_FILE="/opt/pqc/key_out/pqc_psk"
+  EOF
 
-   [Service]
-   Type=simple
-   ExecStart=/opt/arnika/arnika
-   EnvironmentFile=/opt/arnika/arnika.env
-   Restart=on-failure
+  sudo chmod 600 /opt/arnika/arnika.env
+  ```
 
-   [Install]
-   WantedBy=multi-user.target
-   EOF
-   ```
+  > [!IMPORTANT]
+  > Three values must line up between the two peers, or key rotation silently misbehaves:
+  >
+  > - **`ARNIKA_PSK` must be identical.** It authenticates and encrypts the peer channel. If it
+  >   is unset, Arnika starts but the channel keys derive from the empty string and offer no
+  >   protection.
+  > - **`ARNIKA_ID` must differ in parity** — one odd, one even (`9999` and `9998` above). Only
+  >   the lowest bit takes part in PRIMARY/BACKUP election, so two even or two odd IDs make both
+  >   peers pick the *same* role every interval. Without an explicit `ARNIKA_ID` each peer
+  >   defaults to its own listen port, which is `9999` on both hosts here — identical, and
+  >   therefore broken.
+  > - **`INTERVAL` must be identical.** Roles are elected per interval number, so different
+  >   interval lengths drift the two peers apart. Earlier releases suggested offsetting Bob's
+  >   interval to avoid flapping; that is obsolete and now harmful.
 
-7. Enable and start the Arnika service:
+  > [!NOTE]
+  > The `KMS_URL` above points at a real KMS. With the bundled simulator instead, use
+  > `http://127.0.0.1:8080/api/v1/keys/CONSA` on Alice and `.../CONSB` on Bob, and leave
+  > `CERTIFICATE`, `PRIVATE_KEY` and `CA_CERTIFICATE` unset — the simulator is HTTP-only and
+  > needs no client certificate.
 
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable arnika.service
-   sudo systemctl start arnika.service
-   ```
+- Create a systemd service for Arnika:
+
+  ```bash
+  sudo tee /etc/systemd/system/arnika.service > /dev/null << EOF
+  # /etc/systemd/system/arnika.service
+  [Unit]
+  Description=Arnika Quantum Secure VPN
+  After=wg-quick.target
+  Requires=wg-quick.target
+
+  [Service]
+  Type=simple
+  ExecStart=/opt/arnika/arnika
+  EnvironmentFile=/opt/arnika/arnika.env
+  Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+  ```
+
+  > [!NOTE]
+  > This unit runs Arnika as `root`, which is acceptable for a lab or PoC. For production, add a
+  > dedicated service user with `AmbientCapabilities=CAP_NET_ADMIN` and the isolation directives
+  > from the hardening snippet in [`SECURITY.md`](SECURITY.md).
+
+- Enable and start the Arnika service:
+
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl enable arnika.service
+  sudo systemctl start arnika.service
+  ```
 
 ## Tools Installation
 
-Perform these steps on both Alice and Bob servers:
+Run on both Alice and Bob:
 
-1. Install required packages for tools:
+- Install required packages for tools:
 
-   ```bash
-   sudo apt install -y tmux fping curl iperf3 iftop mtr
-   ```
+  ```bash
+  sudo apt install -y tmux fping curl iperf3 iftop mtr
+  ```
 
-2. Create a directory for the tools:
+- Create a directory for the tools:
 
-   ```bash
-   sudo mkdir -p /opt/arnika-tools
-   ```
+  ```bash
+  sudo mkdir -p /opt/arnika-tools
+  ```
 
-3. Create utility scripts:
+- Create utility scripts:
 
-   **KMS key request script** (for retrieving and managing keys from the KMS server):
-   ```bash
-   sudo tee /opt/arnika-tools/keyreq.sh > /dev/null << EOF
-   #!/bin/bash
+  **KMS key request script** (for retrieving and managing keys from the KMS server):
+  ```bash
+  sudo tee /opt/arnika-tools/keyreq.sh > /dev/null << EOF
+  #!/bin/bash
 
-   INPUT="\$1"
+  INPUT="\$1"
 
-   KMS=https://<KMS_SERVER>:7000
-   SAE_ID="arnika-bob"  # Use "arnika-alice" on Bob's server
+  KMS=https://<KMS_SERVER>:7000
+  SAE_ID="arnika-bob"  # Use "arnika-alice" on Bob's server
 
-   CACERT="/opt/arnika/kms_certs/ca.crt"
-   CERT="/opt/arnika/kms_certs/arnika-alice.crt"  # Use "arnika-bob.crt" on Bob's server
-   KEY="/opt/arnika/kms_certs/arnika-alice.key"   # Use "arnika-bob.key" on Bob's server
+  CACERT="/opt/arnika/kms_certs/ca.crt"
+  CERT="/opt/arnika/kms_certs/arnika-alice.crt"  # Use "arnika-bob.crt" on Bob's server
+  KEY="/opt/arnika/kms_certs/arnika-alice.key"   # Use "arnika-bob.key" on Bob's server
 
-   if [[ ! -n "\$INPUT" ]]
-   then
-       echo "Usage: \$0 status, new, <keyid>"
-       exit 1
-   fi
+  if [[ ! -n "\$INPUT" ]]
+  then
+      echo "Usage: \$0 status, new, <keyid>"
+      exit 1
+  fi
 
-   if [[ "\$INPUT" == "status" ]]
-   then
-       echo "STATUS:"
-       curl --url \$KMS/api/v1/keys/\$SAE_ID/status --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
-   elif [[ "\$INPUT" == "new" ]]
-   then
-       echo "NEW KEY:"
-       curl --url \$KMS/api/v1/keys/\$SAE_ID/enc_keys --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
-   else
-       echo "KEY_ID:"
-       curl --url \$KMS/api/v1/keys/\$SAE_ID/dec_keys?key_ID=\$INPUT --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
-   fi
-   EOF
-   ```
+  if [[ "\$INPUT" == "status" ]]
+  then
+      echo "STATUS:"
+      curl --url \$KMS/api/v1/keys/\$SAE_ID/status --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
+  elif [[ "\$INPUT" == "new" ]]
+  then
+      echo "NEW KEY:"
+      curl --url \$KMS/api/v1/keys/\$SAE_ID/enc_keys --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
+  else
+      echo "KEY_ID:"
+      curl --url \$KMS/api/v1/keys/\$SAE_ID/dec_keys?key_ID=\$INPUT --cacert \$CACERT --cert \$CERT --key \$KEY --header "Content-Type: application/json"
+  fi
+  EOF
+  ```
 
-   **Arnika service management script** (for starting/stopping all services):
-   ```bash
-   sudo tee /opt/arnika-tools/init_arnika.sh > /dev/null << EOF
-   #!/bin/bash
+  **Arnika service management script** (for starting/stopping all services):
+  ```bash
+  sudo tee /opt/arnika-tools/init_arnika.sh > /dev/null << EOF
+  #!/bin/bash
 
-   INPUT="\$1"
+  INPUT="\$1"
 
-   if [[ ! -n "\$INPUT" ]]
-   then
-       echo "Usage: \$0 start, stop, status"
-       exit 1
-   fi
+  if [[ ! -n "\$INPUT" ]]
+  then
+      echo "Usage: \$0 start, stop, status"
+      exit 1
+  fi
 
-   if [[ "\$INPUT" == "start" ]]
-   then
-       echo "start: systemctl start wg-quick@qcicat0 kms arnika"
-       systemctl start wg-quick@qcicat0 kms arnika
-   elif [[ "\$INPUT" == "stop" ]]
-   then
-       echo "stop: systemctl stop wg-quick@qcicat0 kms arnika"
-       systemctl stop wg-quick@qcicat0 kms arnika
-   else
-       echo "status: systemctl status wg-quick@qcicat0 kms arnika"
-       systemctl status wg-quick@qcicat0 kms arnika
-   fi
+  if [[ "\$INPUT" == "start" ]]
+  then
+      echo "start: systemctl start wg-quick@qcicat0 kms arnika"
+      systemctl start wg-quick@qcicat0 kms arnika
+  elif [[ "\$INPUT" == "stop" ]]
+  then
+      echo "stop: systemctl stop wg-quick@qcicat0 kms arnika"
+      systemctl stop wg-quick@qcicat0 kms arnika
+  else
+      echo "status: systemctl status wg-quick@qcicat0 kms arnika"
+      systemctl status wg-quick@qcicat0 kms arnika
+  fi
 
-   echo
-   echo "journalctl -f -u wg-quick@qcicat0 -u arnika -u kms"
-   echo
-   EOF
-   ```
+  echo
+  echo "journalctl -f -u wg-quick@qcicat0 -u arnika -u kms"
+  echo
+  EOF
+  ```
 
-   **Wireguard show script** (displays the current Wireguard status):
-   ```bash
-   sudo tee /opt/arnika-tools/wg-show.sh > /dev/null << EOF
-   #!/bin/bash
-   wg show
-   EOF
-   ```
+  **Wireguard show script** (displays the current Wireguard status):
+  ```bash
+  sudo tee /opt/arnika-tools/wg-show.sh > /dev/null << EOF
+  #!/bin/bash
+  wg show
+  EOF
+  ```
 
-   **Wireguard watch script** (continuously monitors Wireguard status):
-   ```bash
-   sudo tee /opt/arnika-tools/wg-watch.sh > /dev/null << EOF
-   #!/bin/bash
-   watch -n 1 wg show
-   EOF
-   ```
+  **Wireguard watch script** (continuously monitors Wireguard status):
+  ```bash
+  sudo tee /opt/arnika-tools/wg-watch.sh > /dev/null << EOF
+  #!/bin/bash
+  watch -n 1 wg show
+  EOF
+  ```
 
-   **Tmux init script** (for starting all services in tmux sessions):
-   ```bash
-   sudo tee /opt/arnika-tools/init_tmux.sh > /dev/null << EOF
-   #!/bin/sh
+  **Tmux init script** (for starting all services in tmux sessions):
+  ```bash
+  sudo tee /opt/arnika-tools/init_tmux.sh > /dev/null << EOF
+  #!/bin/sh
 
-   wg-quick up qcicat0
+  wg-quick up qcicat0
 
-   wg showconf qcicat0
+  wg showconf qcicat0
 
-   # For KMS mode
-   tmux new -d -s kms '/opt/kms/kms' \;
+  # For KMS mode
+  tmux new -d -s kms '/opt/kms/kms' \;
 
-   # Arnika
-   tmux new -d -s arnika 'env \$(cat /opt/arnika/arnika.env | xargs) /opt/arnika/arnika' \;
+  # Arnika
+  tmux new -d -s arnika 'env \$(cat /opt/arnika/arnika.env | xargs) /opt/arnika/arnika' \;
 
-   # WG watch
-   tmux new -d -s wg 'wg-watch.sh' \;
+  # WG watch
+  tmux new -d -s wg 'wg-watch.sh' \;
 
-   # Ping
-   # For Alice
-   tmux new -d -s ping 'fping -l -D -e -o -s fdac::2' \;
-   # For Bob, uncomment:
-   # tmux new -d -s ping 'fping -l -D -e -o -s fdac::1' \;
-   EOF
-   ```
+  # Ping
+  # For Alice
+  tmux new -d -s ping 'fping -l -D -e -o -s fdac::2' \;
+  # For Bob, uncomment:
+  # tmux new -d -s ping 'fping -l -D -e -o -s fdac::1' \;
+  EOF
+  ```
 
-   **Fping init script** (for monitoring connectivity):
-   ```bash
-   sudo tee /opt/arnika-tools/init_fping.sh > /dev/null << EOF
-   #!/bin/bash
+  **Fping init script** (for monitoring connectivity):
+  ```bash
+  sudo tee /opt/arnika-tools/init_fping.sh > /dev/null << EOF
+  #!/bin/bash
 
-   # On Alice:
-   fping -l -D -e -o -s fdac::2
+  # On Alice:
+  fping -l -D -e -o -s fdac::2
 
-   # On Bob (uncomment):
-   # fping -l -D -e -o -s fdac::1
-   EOF
-   ```
+  # On Bob (uncomment):
+  # fping -l -D -e -o -s fdac::1
+  EOF
+  ```
 
-   **Iperf init script** (for testing network performance):
-   ```bash
-   sudo tee /opt/arnika-tools/init_iperf.sh > /dev/null << EOF
-   #!/bin/bash
+  **Iperf init script** (for testing network performance):
+  ```bash
+  sudo tee /opt/arnika-tools/init_iperf.sh > /dev/null << EOF
+  #!/bin/bash
 
-   # On Alice (server):
-   iperf3 -s
+  # On Alice (server):
+  iperf3 -s
 
-   # On Bob (client, uncomment):
-   # iperf3 -c 10.127.254.9
-   EOF
-   ```
+  # On Bob (client, uncomment):
+  # iperf3 -c 10.127.254.9
+  EOF
+  ```
 
-   **Tcpdump init script** (for capturing and analyzing packets):
-   ```bash
-   sudo tee /opt/arnika-tools/init_tcpdump.sh > /dev/null << EOF
-   #!/bin/bash
+  **Tcpdump init script** (for capturing and analyzing packets):
+  ```bash
+  sudo tee /opt/arnika-tools/init_tcpdump.sh > /dev/null << EOF
+  #!/bin/bash
 
-   tcpdump -i qcicat0 -n
-   EOF
-   ```
+  tcpdump -i qcicat0 -n
+  EOF
+  ```
 
-4. Make the scripts executable and create symlinks:
+- Make the scripts executable and create symlinks:
 
-   ```bash
-   sudo chmod 750 /opt/arnika-tools/*.sh
+  ```bash
+  sudo chmod 750 /opt/arnika-tools/*.sh
 
-   sudo ln -sf /opt/arnika-tools/keyreq.sh /usr/local/sbin/keyreq.sh
-   sudo ln -sf /opt/arnika-tools/wg-show.sh /usr/local/sbin/wg-show.sh
-   sudo ln -sf /opt/arnika-tools/wg-watch.sh /usr/local/sbin/wg-watch.sh
-   sudo ln -sf /opt/arnika-tools/init_arnika.sh /usr/local/sbin/init_arnika.sh
-   sudo ln -sf /opt/arnika-tools/init_tmux.sh /usr/local/sbin/init_tmux.sh
-   sudo ln -sf /opt/arnika-tools/init_fping.sh /usr/local/sbin/init_fping.sh
-   sudo ln -sf /opt/arnika-tools/init_iperf.sh /usr/local/sbin/init_iperf.sh
-   sudo ln -sf /opt/arnika-tools/init_tcpdump.sh /usr/local/sbin/init_tcpdump.sh
-   ```
+  sudo ln -sf /opt/arnika-tools/keyreq.sh /usr/local/sbin/keyreq.sh
+  sudo ln -sf /opt/arnika-tools/wg-show.sh /usr/local/sbin/wg-show.sh
+  sudo ln -sf /opt/arnika-tools/wg-watch.sh /usr/local/sbin/wg-watch.sh
+  sudo ln -sf /opt/arnika-tools/init_arnika.sh /usr/local/sbin/init_arnika.sh
+  sudo ln -sf /opt/arnika-tools/init_tmux.sh /usr/local/sbin/init_tmux.sh
+  sudo ln -sf /opt/arnika-tools/init_fping.sh /usr/local/sbin/init_fping.sh
+  sudo ln -sf /opt/arnika-tools/init_iperf.sh /usr/local/sbin/init_iperf.sh
+  sudo ln -sf /opt/arnika-tools/init_tcpdump.sh /usr/local/sbin/init_tcpdump.sh
+  ```
 
 ## Service Management
 
-You can manage all services using the provided `init_arnika.sh` script:
+Manage all services with the `init_arnika.sh` script:
 
 ```bash
 # Start all services
@@ -524,7 +631,7 @@ init_arnika.sh status
 init_arnika.sh stop
 ```
 
-Or manage individual services with systemctl:
+Or individually with `systemctl`:
 
 ```bash
 # Wireguard
@@ -543,77 +650,103 @@ sudo systemctl start arnika
 sudo systemctl stop arnika
 ```
 
-Alternatively, you can use the `init_tmux.sh` script to start all services in separate tmux sessions:
+To run the services in separate tmux sessions instead:
 
 ```bash
 init_tmux.sh
 ```
 
-This allows you to manage and monitor each service easily. You can attach to any session using:
+Attach to a session with:
 
 ```bash
-tmux attach -t [session_name]  # where session_name is: kms, arnika, wg, ping
+tmux attach -t <session>   # kms, arnika, wg or ping
 ```
 
 ## Verification
 
-1. Check that all services are running:
+- Check that all services are running:
 
-   ```bash
-   init_arnika.sh status
-   ```
+  ```bash
+  init_arnika.sh status
+  ```
 
-2. Verify Wireguard configuration:
+- Verify Wireguard configuration:
 
-   ```bash
-   wg-show.sh
-   ```
+  ```bash
+  wg-show.sh
+  ```
 
-3. If using KMS, check key status:
+- If using KMS, check key status:
 
-   ```bash
-   keyreq.sh status
-   ```
+  ```bash
+  keyreq.sh status
+  ```
 
-4. Check logs for any issues:
+- Check logs for any issues:
 
-   ```bash
-   journalctl -u wg-quick@qcicat0
-   journalctl -u kms
-   journalctl -u arnika
-   ```
+  ```bash
+  journalctl -u wg-quick@qcicat0
+  journalctl -u kms
+  journalctl -u arnika
+  ```
 
-5. Test connectivity between Alice and Bob:
+  > [!CAUTION]
+  > Arnika's startup banner prints `ARNIKA_PSK` in cleartext, so treat this journal as sensitive
+  > and redact it before sharing.
 
-   **On Alice**:
-   ```bash
-   # Ping Bob's IPv6 address
-   ping fdac::2
+- Verify that key rotation and role election work:
 
-   # Ping Bob's IPv4 address
-   ping 10.127.254.10
-   ```
+  ```bash
+  journalctl -u arnika -f | grep -E 'PRIMARY|BACKUP'
+  ```
 
-   **On Bob**:
-   ```bash
-   # Ping Alice's IPv6 address
-   ping fdac::1
+  Across consecutive intervals exactly **one** of the two hosts must log `PRIMARY` at a time, and
+  both must log `[OK] PSK configured on WireGuard interface`. If both hosts log `PRIMARY` for the
+  same interval, or neither does, check that `ARNIKA_PSK` is identical, `INTERVAL` is identical,
+  and the two `ARNIKA_ID` values differ in parity.
 
-   # Ping Alice's IPv4 address
-   ping 10.127.254.9
-   ```
+- Confirm WireGuard is actually receiving a PSK:
 
-6. Test network performance (optional):
+  ```bash
+  sudo wg show qcicat0 preshared-keys
+  ```
 
-   **On Alice**:
-   ```bash
-   init_iperf.sh
-   ```
+  An all-zero value means the PSK was never installed — the tunnel is running without quantum
+  protection.
 
-   **On Bob**:
-   ```bash
-   # Edit the script first to uncomment the client line
-   init_iperf.sh
-   ```
+- Test connectivity between Alice and Bob:
 
-This completes the manual installation of the Arnika Quantum-Secure VPN system on both Alice and Bob servers.
+  **On Alice**:
+  ```bash
+  # Ping Bob's IPv6 address
+  ping fdac::2
+
+  # Ping Bob's IPv4 address
+  ping 10.127.254.10
+  ```
+
+  **On Bob**:
+  ```bash
+  # Ping Alice's IPv6 address
+  ping fdac::1
+
+  # Ping Alice's IPv4 address
+  ping 10.127.254.9
+  ```
+
+- Test network performance (optional):
+
+  **On Alice**:
+  ```bash
+  init_iperf.sh
+  ```
+
+  **On Bob**:
+  ```bash
+  # Edit the script first to uncomment the client line
+  init_iperf.sh
+  ```
+
+Installation is complete on both hosts. Before going to production, work through the deployment
+checklist in [`SECURITY.md`](SECURITY.md) — it covers service users and capabilities, the
+`ARNIKA_PSK` handling, certificate validation and log sensitivity.

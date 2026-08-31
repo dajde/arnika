@@ -7,10 +7,16 @@
 System (KMS) via ETSI GS QKD 014 and/or Post-Quantum Cryptography (PQC). It is
 developed in the scope of the EU **EUROQCI / QCI-CAT** research program.
 
-Arnika injects the derived PSK **directly into a kernel WireGuard interface via the Linux Netlink /
-Generic Netlink (`NETLINK_GENERIC`) interface** using `wgctrl`
-(`golang.zx2c4.com/wireguard/wgctrl`). This kernel-level interface interaction is a core security
-boundary and is treated as such throughout this policy.
+Arnika installs the derived PSK through a **key writer** adapter. Two are shipped
+(see [`KEYCONTROL.md`](KEYCONTROL.md)), and they have different security boundaries:
+
+| Key writer | Build tag | How the PSK reaches WireGuard | Security boundary |
+|---|---|---|---|
+| netlink (default) | _(none)_ / `wireguard_netlink` | Local kernel WireGuard interface via Generic Netlink (`NETLINK_GENERIC`) using `wgctrl` | Kernel Netlink socket, `CAP_NET_ADMIN` |
+| MikroTik | `wireguard_mikrotik` | REST API call to a remote RouterOS router over HTTPS | Authenticated TLS session to the router |
+
+Both boundaries are treated as core security boundaries throughout this policy. Where a rule
+applies to only one writer, it is marked accordingly.
 
 Because Arnika operates at the intersection of cryptographic key material handling, VPN
 infrastructure, kernel Netlink communication, and quantum-secure cryptographic protocols, security
@@ -29,7 +35,8 @@ release before reporting a vulnerability.
 | Version       | Supported          |
 |---------------|--------------------|
 | latest (main) | ✅ Yes              |
-| < latest      | ❌ No               |
+| v1.x          | ✅ Yes              |
+| < v1.x        | ❌ No               |
 
 ---
 
@@ -50,7 +57,8 @@ Please include the following in your report:
 
 - A clear description of the vulnerability and its potential impact
 - Affected component(s): Arnika core, KMS connector (ETSI014), PQC/QKD key derivation (KDF),
-  WireGuard Netlink PSK injection, TCP inter-peer channel, or KMS mock/tooling
+  WireGuard PSK injection (netlink or MikroTik key writer), UDP inter-peer channel, or KMS
+  mock/tooling
 - Steps to reproduce or a proof-of-concept (PoC) if available
 - Affected version(s) and environment (OS, kernel version, Go version, WireGuard version)
 - Any suggested mitigations or patches
@@ -75,7 +83,9 @@ We follow **coordinated responsible disclosure**:
 
 The following are **in scope** for security reports:
 
-### Netlink / WireGuard PSK Injection
+### Key Writers / WireGuard PSK Injection
+
+The following apply to the **netlink key writer** (the default):
 
 - **Privilege escalation via Netlink**: Arnika uses `wgctrl` over `NETLINK_GENERIC` to write PSKs
   into the WireGuard kernel interface. Any vulnerability that allows unauthorized processes to
@@ -91,6 +101,17 @@ The following are **in scope** for security reports:
   inadvertently grants broader kernel capabilities (e.g., full `CAP_NET_ADMIN`) beyond what is
   strictly needed is in scope.
 
+The following apply to **remote key writers** such as the MikroTik RouterOS adapter
+(`wireguard_mikrotik`, see [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md)):
+
+- **PSK in transit to the router**: the derived PSK leaves the Arnika host. Weak or absent TLS
+  verification (`MIKROTIK_TLS_INSECURE=true` outside a lab, missing
+  `MIKROTIK_CA_CERTIFICATE`), or any flaw exposing the PSK on the management network, is in scope.
+- **Router credential handling**: leakage or misuse of `MIKROTIK_USERNAME` /
+  `MIKROTIK_PASSWORD`, or a router account with privileges beyond writing the peer PSK.
+- **PSK written to the wrong peer or interface** on the router, or a failed write that leaves a
+  stale PSK in place without alerting the operator.
+
 ### Key Material Handling
 
 - Incorrect derivation, leakage, or misuse of QKD or PQC keys in memory
@@ -102,17 +123,23 @@ The following are **in scope** for security reports:
 - Authentication bypass, MITM susceptibility, or missing TLS enforcement on the `KMS_URL`
   endpoint (ETSI GS QKD 014 API)
 
-### Inter-Peer Key ID Exchange (TCP Channel)
+### Inter-Peer Key ID Exchange (UDP Channel)
 
-- Spoofing, replay attacks, or tampering with key IDs transmitted over the Arnika TCP channel
-- Missing or misconfigured mTLS (`CERTIFICATE`, `PRIVATE_KEY`, `CA_CERTIFICATE`)
+The peer channel is UDP, authenticated and encrypted with `ARNIKA_PSK` (HMAC-SHA256 signature +
+AES-256-GCM payload, see [`CODEFLOW.md`](CODEFLOW.md)):
+
+- Spoofing, replay attacks, or tampering with key IDs transmitted over the Arnika UDP channel
+- Weaknesses in packet signing, encryption, timestamp validation (`MAX_CLOCK_SKEW`) or per-IP
+  rate limiting (`RATE_LIMIT`, `RATE_WINDOW`)
+- Any leakage of `ARNIKA_PSK`, or a code path that accepts packets that fail verification
 
 
 ### Dependencies
 
 - Vulnerabilities in Go modules: `golang.zx2c4.com/wireguard/wgctrl`,
   `github.com/mdlayher/genetlink`, `github.com/mdlayher/netlink`, `github.com/mdlayher/socket`,
-  `golang.org/x/crypto`, `golang.org/x/sys`
+  `golang.org/x/crypto` (HKDF, SHA-3), `golang.org/x/net`, `golang.org/x/sys`,
+  `github.com/google/uuid`
 
 ### Mode Downgrade
 
@@ -155,8 +182,10 @@ Key implications for security:
   dedicated node with no untrusted local users, strict MAC enforcement, and full network perimeter
   control). For all other production use, running as root is strongly discouraged in favour of
   capability-scoped service accounts.
-- **Arnika and WireGuard MUST run on the same host and kernel instance.** The PSK is injected
-  directly into the kernel interface; there is no mechanism for remote PSK injection.
+- **With the netlink key writer, Arnika and WireGuard MUST run on the same host and kernel
+  instance.** The PSK is injected directly into the local kernel interface. Remote PSK injection
+  requires a key writer built for it, such as the MikroTik RouterOS adapter, which carries its own
+  transport security requirements (see below).
 - **The Netlink socket is not authenticated at the application level.** Isolation of the Arnika
   process via Linux namespaces, cgroups, or Mandatory Access Control (e.g., AppArmor, SELinux) is
   strongly recommended to prevent other local processes from interfering with or observing the
@@ -165,11 +194,59 @@ Key implications for security:
   window and passed directly to the kernel via Netlink. Any path that causes the PSK to be logged
   or written to disk is a high-severity finding.
 
-### mTLS for Inter-Peer Channel
+### Inter-Peer Channel Authentication (`ARNIKA_PSK`)
 
-Mutual TLS is strongly recommended for the inter-peer TCP channel used to exchange QKD key IDs.
-Running without mTLS (`CERTIFICATE`, `PRIVATE_KEY`, `CA_CERTIFICATE` not configured) is only
-acceptable in isolated lab environments.
+The channel used to exchange QKD key IDs is **UDP**, and its only cryptographic protection is the
+shared secret `ARNIKA_PSK`. Packets are signed with HMAC-SHA256 and their payload encrypted with
+AES-256-GCM, using two keys derived from that secret with domain separation (`auth/auth.go`).
+
+- **`ARNIKA_PSK` MUST be set, identical on both peers, and secret.** It is not read from a file
+  and not negotiated — there is no fallback and no alternative authentication mechanism for this
+  channel.
+- **An unset `ARNIKA_PSK` is a critical misconfiguration.** The variable defaults to the empty
+  string and is not rejected at startup. Both derived keys then depend only on the empty string
+  and are trivially computable by anyone, so any host that can reach `LISTEN_ADDRESS` can inject
+  or decrypt key IDs. Arnika still starts and appears to work.
+- **Generate it with a CSPRNG**, at least 32 bytes of entropy, e.g. `openssl rand -base64 32`.
+  Distribute it out of band and rotate it on both peers together.
+- **The startup banner prints `ARNIKA_PSK` in cleartext** (`Arnika PSK: …`). Treat Arnika's stdout
+  and journal as secret material, or redact it before sharing logs.
+- **Supporting controls on the same channel**: per-IP rate limiting (`RATE_LIMIT`, `RATE_WINDOW`,
+  default 30/min) and timestamp replay protection (`MAX_CLOCK_SKEW`, default `1m`). Lowering
+  `MAX_CLOCK_SKEW` reduces the replay window but requires closer clock synchronisation between
+  peers.
+
+Mutual TLS is **not** available on this channel. `CERTIFICATE`, `PRIVATE_KEY` and
+`CA_CERTIFICATE` do not apply to it — see the next section.
+
+### Role Election Integrity (`ARNIKA_ID`)
+
+Which peer requests a new key in a given interval is decided locally by
+`HMAC-SHA256(ARNIKA_PSK, intervalNumber)` XOR `ARNIKA_ID` (`config/config.go`, `IsPrimary`).
+
+- **The two peers' `ARNIKA_ID` values MUST have different parity** — one odd, one even. Only the
+  lowest bit of `ARNIKA_ID` enters the decision, so two peers with different but same-parity IDs
+  (e.g. `100` and `102`) elect the *same* role in every interval, and both or neither will rotate.
+- **`ARNIKA_ID` defaults to the port from `LISTEN_ADDRESS`.** If both peers listen on the same
+  port, they inherit the same ID and role election never separates them. Set it explicitly.
+- **Both peers MUST use the same `INTERVAL`.** The election is only guaranteed to produce opposite
+  roles for the same interval number; different interval lengths make the counters drift apart and
+  the roles independent.
+
+### KMS Client Certificates (`CERTIFICATE`, `PRIVATE_KEY`, `CA_CERTIFICATE`)
+
+These three variables configure **client-certificate authentication towards the KMS only**
+(`repositories/kms.go`, wired in `keyreader.go`). They are used for the ETSI GS QKD 014 HTTPS
+connection and for nothing else — in particular they do not protect the inter-peer channel.
+
+They are **all-or-nothing**: if any one of them is empty, client-certificate authentication is
+silently disabled and the KMS connection falls back to server-only validation against the system
+root store (TLS 1.2 minimum). Where the KMS requires mutual TLS, configure all three, keep the
+private key `0600` and owned by the Arnika user, and note that `CA_CERTIFICATE` then *replaces*
+the system roots for that connection.
+
+A deployment that believes it is using mutual TLS towards the KMS while one of the three variables
+is unset is a misconfiguration worth reporting.
 
 ### KMS Endpoint Security
 
@@ -224,20 +301,29 @@ for empty or whitespace-only keys.
   > `AmbientCapabilities=CAP_NET_ADMIN` is strongly preferred.
 - [ ] `CAP_NET_ADMIN` is granted **only** via `AmbientCapabilities` in the systemd unit — no
   broader root or wildcard capability grants
-- [ ] Arnika and WireGuard run on the **same hardened Linux host**
+- [ ] Arnika and WireGuard run on the **same hardened Linux host** (netlink key writer); for a
+  remote key writer, the management path to the target device is trusted and TLS-verified
 - [ ] Host is hardened with MAC (AppArmor or SELinux) to restrict Arnika's Netlink access to the
   `wireguard` genetlink family only
 - [ ] `KMS_URL` uses `https://` with a trusted, validated certificate
-- [ ] `CERTIFICATE`, `PRIVATE_KEY`, and `CA_CERTIFICATE` are configured for mTLS between Arnika
-  peers
+- [ ] `ARNIKA_PSK` is set to at least 32 bytes of CSPRNG output, **identical on both peers**, and
+  never left unset
+- [ ] `ARNIKA_ID` is set explicitly on both peers, with **different parity** (one odd, one even)
+- [ ] Both peers use the **same `INTERVAL`**
+- [ ] `CERTIFICATE`, `PRIVATE_KEY`, and `CA_CERTIFICATE` are configured where the **KMS** requires
+  client-certificate authentication (these do not apply to the inter-peer channel)
+- [ ] For the MikroTik key writer: `MIKROTIK_CA_CERTIFICATE` is set, `MIKROTIK_TLS_INSECURE` is
+  **not** enabled, and the router account is restricted to writing the peer PSK
 - [ ] `PQC_PSK_FILE` has permissions `0600` and is owned by the Arnika process user
 - [ ] The parent directory containing `PQC_PSK_FILE` is **not writable** by the Arnika process user
 - [ ] The KMS mock (`tools/kms`) is **not** deployed or reachable in production
 - [ ] WireGuard `INTERVAL` and Arnika `INTERVAL` are aligned (recommended: `120s`)
-- [ ] Go version `>= 1.22` (recommended: latest `1.24.x`) is used
+- [ ] Go version `>= 1.26` is used, with `GOEXPERIMENT=runtimesecret` set for every `go` command
+  (required by the `runtime/secret` memory hardening; the `Makefile` sets it already)
 - [ ] Dependency integrity is verified via `go.sum` before building from source
 - [ ] Arnika logs are monitored for PSK injection failures or fallback-to-zero-PSK events —
   these indicate loss of quantum protection
+- [ ] Arnika logs are treated as sensitive: the startup banner prints `ARNIKA_PSK` in cleartext
 - [ ] Process is isolated with `ProtectSystem=strict`, `PrivateTmp=true`, and
   `NoNewPrivileges=true` in the systemd unit
 
