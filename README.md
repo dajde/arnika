@@ -79,6 +79,19 @@ Subsequently, the **KEY-CONTROL function** uses the **QKD key** and **PQC key** 
 The specific derivation function, whether **HKDF** or an alternative, is a topic open for discussion among cryptographic experts.
 
 
+## Portability
+
+Arnika is based on hexagonal architecture (Ports and Adapters) and provides the capability to develop custom key-reader and key-writer adapters. See [`KEYCONTROL.md`](KEYCONTROL.md) for details.
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+  <tr>
+    <td align="center">
+        <a href="img/Arnika-keycontrol.png"><img src="img/Arnika-keycontrol.png" alt="Arnika Key Control Architecture, Figure 4" width="100%"/></a>
+        <br/><em>Figure 4</em>
+    </td>
+  </tr>
+</table>
+
 # Advantages
 
 QKD/PQC operation on **Layer 3** offers several notable advantages:
