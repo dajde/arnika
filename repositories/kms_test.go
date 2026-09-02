@@ -9,9 +9,16 @@ import (
 	"time"
 )
 
-// newTestRepo builds an HTTPKMSRepository against a test server without going
-// through NewHTTPKMSRepository, which calls log.Fatal on certificate problems.
-func newTestRepo(baseURL string, maxRetries int) *HTTPKMSRepository {
+// newKMSTestRepo builds an HTTPKMSRepository against a test server without
+// going through NewHTTPKMSRepository, which calls log.Fatal on certificate
+// problems.
+//
+// Named for the repository it builds rather than `newTestRepo`, because
+// repositories/ now holds more than one kind: wireguard-mikrotik_test.go
+// declares its own helper of that name returning a
+// WireguardMikrotikRepository, and two cannot coexist in one package. Keeping
+// the type in the name leaves room for the next key writer.
+func newKMSTestRepo(baseURL string, maxRetries int) *HTTPKMSRepository {
 	return &HTTPKMSRepository{
 		baseURL:          baseURL,
 		maxRetries:       maxRetries,
@@ -60,7 +67,7 @@ func TestKMSRequestNonOKDoesNotReadClosedBody(t *testing.T) {
 				srv := busyKMS(status)
 				defer srv.Close()
 
-				_, _, err := newTestRepo(srv.URL, retries).kmsRequest("/enc_keys")
+				_, _, err := newKMSTestRepo(srv.URL, retries).kmsRequest("/enc_keys")
 				if err == nil {
 					t.Fatal("expected an error when the KMS never returns 200")
 				}
@@ -79,7 +86,7 @@ func TestKMSRequestReportsAnExhaustedRetryLoop(t *testing.T) {
 	srv := busyKMS(http.StatusServiceUnavailable)
 	defer srv.Close()
 
-	_, _, err := newTestRepo(srv.URL, 2).kmsRequest("/enc_keys")
+	_, _, err := newKMSTestRepo(srv.URL, 2).kmsRequest("/enc_keys")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -94,7 +101,7 @@ func TestKMSRequestSucceedsOnOK(t *testing.T) {
 	srv := okKMS()
 	defer srv.Close()
 
-	id, key, err := newTestRepo(srv.URL, 2).kmsRequest("/enc_keys")
+	id, key, err := newKMSTestRepo(srv.URL, 2).kmsRequest("/enc_keys")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +129,7 @@ func TestKMSRequestRetriesUntilTheKMSRecovers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	id, _, err := newTestRepo(srv.URL, 3).kmsRequest("/enc_keys")
+	id, _, err := newKMSTestRepo(srv.URL, 3).kmsRequest("/enc_keys")
 	if err != nil {
 		t.Fatalf("expected recovery on the third attempt, got: %v", err)
 	}
@@ -140,7 +147,7 @@ func TestKMSRequestReportsATransportError(t *testing.T) {
 	url := srv.URL
 	srv.Close() // nothing is listening now
 
-	_, _, err := newTestRepo(url, 0).kmsRequest("/enc_keys")
+	_, _, err := newKMSTestRepo(url, 0).kmsRequest("/enc_keys")
 	if err == nil {
 		t.Fatal("expected a transport error")
 	}
