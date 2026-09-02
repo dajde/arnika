@@ -74,7 +74,89 @@ jobs:
           CGO_ENABLED: 0
           GOEXPERIMENT: runtimesecret
         run: |
-          go build .
+          go build ./...
+
+  writers:
+    name: Key writer builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build, vet and conflict-check every writer
+        env:
+          GOEXPERIMENT: runtimesecret
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+
+          # "<build tag>:<space-separated supported GOOS values>"
+          # Adding a writer means adding one line here. See KEYCONTROL.md.
+          WRITERS=(
+            "wireguard_netlink:linux darwin"
+            "wireguard_mikrotik:linux darwin"
+          )
+          ALL_GOOS=(linux darwin)
+
+          TAGS=()
+          for entry in "${WRITERS[@]}" ; do TAGS+=("${entry%%:*}") ; done
+
+          echo "::group::Build each writer for its supported platforms"
+          for entry in "${WRITERS[@]}" ; do
+            tag="${entry%%:*}"
+            for goos in ${entry#*:} ; do
+              for goarch in amd64 arm64 ; do
+                echo "-> $tag $goos/$goarch"
+                GOOS="$goos" GOARCH="$goarch" go build -tags "$tag" -o /dev/null .
+              done
+            done
+          done
+          echo "::endgroup::"
+
+          echo "::group::Vet each writer"
+          for entry in "${WRITERS[@]}" ; do
+            tag="${entry%%:*}"
+            first_goos="$(echo "${entry#*:}" | awk '{print $1}')"
+            echo "-> $tag (GOOS=$first_goos)"
+            GOOS="$first_goos" go vet -tags "$tag" ./...
+          done
+          echo "::endgroup::"
+
+          echo "::group::Unsupported platforms must NOT build"
+          for entry in "${WRITERS[@]}" ; do
+            tag="${entry%%:*}"
+            supported=" ${entry#*:} "
+            for goos in "${ALL_GOOS[@]}" ; do
+              case "$supported" in *" $goos "*) continue ;; esac
+              if GOOS="$goos" GOARCH=arm64 go build -tags "$tag" -o /dev/null . 2>/dev/null ; then
+                echo "::error::$tag built for $goos, which it does not support - its platform constraint has been lost"
+                exit 1
+              fi
+              echo "-> $tag correctly refuses $goos"
+            done
+          done
+          echo "::endgroup::"
+
+          echo "::group::Two writer tags must never compile together"
+          for ((i = 0; i < ${#TAGS[@]}; i++)) ; do
+            for ((j = i + 1; j < ${#TAGS[@]}; j++)) ; do
+              pair="${TAGS[i]} ${TAGS[j]}"
+              if go build -tags "$pair" -o /dev/null . 2>/dev/null ; then
+                echo "::error::tags '$pair' built; expected duplicate getKeyWriterService"
+                exit 1
+              fi
+              echo "-> '$pair' correctly fails"
+            done
+          done
+          echo "::endgroup::"
 
   integration-test:
     name: Integration Test with Containerlab

@@ -16,6 +16,9 @@ belongs in that module's own document under [`docs/`](docs/), never here.
 > matches the adapter file name in [`repositories/`](repositories/).
 > For example `repositories/wireguard-mikrotik.go` →
 > [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md).
+> A `_GOOS` or `_GOARCH` suffix is **not** part of the module name:
+> `repositories/wireguard-netlink-netns_linux.go` is still the
+> `wireguard-netlink-netns` module, documented at `docs/wireguard-netlink-netns.md`.
 > A module is not finished until that document exists.
 
 ---
@@ -73,14 +76,37 @@ flowchart LR
 
 ---
 
+## Platform Support
+
+Arnika distinguishes two classes of platform, and the distinction decides what a module is
+allowed to do when a dependency is not portable:
+
+| Class | Platforms | Meaning |
+|---|---|---|
+| **Supported** | `linux/amd64`, `linux/arm64` | Deployment targets. Released, integration-tested, documented. |
+| **Build-only** | `darwin/amd64`, `darwin/arm64` | Must **compile**, so that maintainers can build, test and run editor tooling on macOS. Not a deployment target, and never exercised against a real kernel. |
+
+Both classes are covered by the `build` matrix in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). `test`, `lint` and the integration
+jobs run on Linux only, which makes **Linux the reference platform** for every correctness
+check.
+
+A backend whose dependency does not build on a build-only platform carries a platform
+constraint (see [rule 2](#naming-and-file-layout-conventions)). It does **not** cause that
+platform to be dropped from CI: the darwin entries exist precisely to catch a non-portable
+dependency leaking into a package that `main` imports, and removing them removes the
+signal.
+
+---
+
 ## Module Index
 
-| Module | Kind | Adapter | Build tag | Document |
-|---|---|---|---|---|
-| `kms` | Reader (managed) | [`repositories/kms.go`](repositories/kms.go) | _(always compiled)_ | _pending_ — see [`KMS.md`](KMS.md) |
-| `pqc` | Reader (unmanaged) | [`repositories/pqc.go`](repositories/pqc.go) | _(always compiled)_ | _pending_ |
-| `wireguard-netlink` | Writer | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go) | _(default)_ / `wireguard_netlink` | [`docs/wireguard-netlink.md`](docs/wireguard-netlink.md) |
-| `wireguard-mikrotik` | Writer | [`repositories/wireguard-mikrotik.go`](repositories/wireguard-mikrotik.go) | `wireguard_mikrotik` | [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md) |
+| Module | Kind | Adapter | Build tag | Platform | Document |
+|---|---|---|---|---|---|
+| `kms` | Reader (managed) | [`repositories/kms.go`](repositories/kms.go) | _(always compiled)_ | any | _pending_ — see [`KMS.md`](KMS.md) |
+| `pqc` | Reader (unmanaged) | [`repositories/pqc.go`](repositories/pqc.go) | _(always compiled)_ | any | _pending_ |
+| `wireguard-netlink` | Writer | [`repositories/wireguard-netlink.go`](repositories/wireguard-netlink.go) | _(default)_ / `wireguard_netlink` | linux _(compiles elsewhere, no device)_ | [`docs/wireguard-netlink.md`](docs/wireguard-netlink.md) |
+| `wireguard-mikrotik` | Writer | [`repositories/wireguard-mikrotik.go`](repositories/wireguard-mikrotik.go) | `wireguard_mikrotik` | any | [`docs/wireguard-mikrotik.md`](docs/wireguard-mikrotik.md) |
 
 ---
 
@@ -98,23 +124,46 @@ flowchart LR
 A module called `<module-name>` (lower-case, dash-separated) occupies a fixed
 set of paths. Following them is what makes a module discoverable:
 
-| Path | Purpose | Build-tagged? |
+| Path | Purpose | Writer-selection tag? |
 |---|---|---|
-| `repositories/<module-name>.go` | The adapter — all backend logic | **No** — always compiled |
-| `repositories/<module-name>_test.go` | Adapter unit tests | **No** — always run |
+| `repositories/<module-name>.go` | The adapter — all backend logic | **No** — always compiled. May carry a *platform* constraint |
+| `repositories/<module-name>_test.go` | Adapter unit tests | **No** — always run. Same platform constraint as the adapter |
 | `<moduletag>.go` (repo root) | Wiring: the `getKeyWriterService` factory | **Yes** (writers only) |
 | `docs/<module-name>.md` | The module's single document | — |
 
-Two rules follow from that table and are worth stating explicitly:
+Three rules follow from that table and are worth stating explicitly:
 
-1. **The adapter is never build-tagged.** Only the root wiring file carries a
-   build constraint. This keeps every adapter compiled, tested, vetted and
-   linted on every ordinary `go test ./...` run, regardless of which backend
-   the shipped binary selects.
-2. **Backend-specific configuration is read in the wiring file**, not in
+1. **The adapter is never excluded by a writer-selection tag.** Only the root wiring file
+   carries a `wireguard_*` constraint. This keeps every adapter compiled, tested, vetted
+   and linted on every ordinary `go test ./...` run on the reference platform, regardless
+   of which backend the shipped binary selects.
+2. **A platform constraint is a different thing, and is permitted.** A backend that
+   depends on a platform-bound kernel feature or package constrains its adapter — and its
+   test file — with an explicit `//go:build linux`, and its wiring file with
+   `wireguard_<backend> && linux`:
+
+   ```go
+   //go:build linux
+
+   // Platform constraint only: <dependency> is Linux-only.
+   // This is not a writer-selection tag; the adapter still compiles,
+   // vets, lints and tests on every ordinary `go test ./...` run.
+
+   package repositories
+   ```
+
+   This does not weaken rule 1. Linux is the reference platform (see
+   [Platform Support](#platform-support)), so a Linux-constrained adapter stays fully
+   covered by `test` and `lint`. What rule 1 forbids is hiding an adapter behind the tag
+   that *selects* it, because that would remove it from those jobs entirely.
+
+   An equivalent `_linux.go` filename suffix also works and is idiomatic Go. Prefer the
+   explicit `//go:build` line here, so a reader who knows rule 1 can see immediately that
+   the constraint is deliberate and is not a writer-selection tag.
+3. **Backend-specific configuration is read in the wiring file**, not in
    [`config/config.go`](config/config.go). The shared `config.Config` stays
-   transport-agnostic; a backend that needs a URL, credentials or a CA bundle
-   reads them from the environment behind its own build tag.
+   transport-agnostic; a backend that needs a URL, credentials, a CA bundle or a namespace
+   path reads them from the environment behind its own build tag.
 
 Build tags use the `wireguard_<backend>` form (underscores — Go build tags
 cannot contain dashes), while file and document names use dashes.
@@ -232,19 +281,40 @@ you can never accidentally compile two writers at once:
 The last row is intentional: requesting both backends is a mistake, and the
 duplicate-symbol error catches it at build time rather than silently picking one.
 
+This is a **load-bearing property, not a side effect** — the writer decides which
+interface receives the PSK, so "two tags silently pick one" is exactly the class of mistake
+that must not survive a build.
+
+> [!WARNING]
+> The property only holds while the default keeps its leading `wireguard_netlink ||`
+> clause. Writing the constraint as a bare conjunction of negations looks equivalent and
+> selects the same writer for every *single* tag, but it makes the netlink file lose to
+> every other tag instead of colliding with it, so the conflicting pairs build silently.
+> The `writers` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) asserts every
+> pair still fails; do not change this constraint without running it.
+
 ### Adding a new key writer
 
 1. **Write the adapter** at `repositories/<module-name>.go` implementing
-   `SetPSK` and `InvalidateTunnel` as described above. Do **not** put a build
-   tag on this file. Take the HTTP client (or equivalent transport) as a
-   constructor argument so that TLS trust and timeouts are configured once, at
-   the wiring layer.
+   `SetPSK` and `InvalidateTunnel` as described above. Do **not** put a
+   writer-selection tag on this file. Take the HTTP client (or equivalent
+   transport) as a constructor argument so that TLS trust and timeouts are
+   configured once, at the wiring layer.
+
+   If the backend depends on something that does not build on every platform in
+   [Platform Support](#platform-support), add `//go:build linux` to the adapter and its
+   test file, per [rule 2](#naming-and-file-layout-conventions). Check it the way CI does:
+
+   ```bash
+   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 GOEXPERIMENT=runtimesecret go build ./...
+   ```
 
 2. **Add the wiring file** at the repo root, named after the tag, e.g.
    `wireguardfoo.go`:
 
    ```go
    //go:build wireguard_foo
+   // ... or, for a platform-bound backend: wireguard_foo && linux
 
    package main
 
@@ -259,11 +329,15 @@ duplicate-symbol error catches it at build time rather than silently picking one
 
 3. **Update the default constraint.** So that exactly one writer compiles, add
    your tag to the *negated* clause of the netlink default in
-   [`wireguardnetlink.go`](wireguardnetlink.go):
+   [`wireguardnetlink.go`](wireguardnetlink.go), **keeping the leading
+   `wireguard_netlink ||` clause intact**:
 
    ```go
    //go:build wireguard_netlink || (!wireguard_mikrotik && !wireguard_foo)
    ```
+
+   Dropping that leading clause silently disables the duplicate-symbol trap — see the
+   warning under [The build-tag mechanism](#the-build-tag-mechanism).
 
 4. **Add tests** at `repositories/<module-name>_test.go`. For a network
    backend, stand up an `httptest.Server` that impersonates the remote API and
@@ -347,7 +421,11 @@ backend-specific constraints, belong in `docs/<module-name>.md`.
 
 Before considering a module done:
 
-- [ ] Adapter at `repositories/<module-name>.go`, **without** a build tag
+- [ ] Adapter at `repositories/<module-name>.go`, **without** a writer-selection tag
+- [ ] Platform-bound backends: `//go:build linux` on the adapter *and* its test file,
+      `wireguard_<tag> && linux` on the wiring, and a **Platform** row in
+      `docs/<module-name>.md`
+- [ ] `GOOS=darwin go build ./...` passes (build-only platform stays green)
 - [ ] Constructor takes all dependencies as arguments (no global state)
 - [ ] Key material cleared with `clear()` / handled inside `secret.Do(...)`
 - [ ] Writers: `SetPSK` re-resolves its target on every call
@@ -357,9 +435,14 @@ Before considering a module done:
 - [ ] Tests at `repositories/<module-name>_test.go` pass under `go test ./...`
 - [ ] `go vet -tags <tag> ./...` and `go build -tags <tag> .` pass
 - [ ] Every `go` command above run with `GOEXPERIMENT=runtimesecret`
-- [ ] Building with two writer tags still fails with a duplicate symbol
-- [ ] `docs/<module-name>.md` written
-- [ ] Row added to the [Module Index](#module-index)
+- [ ] Building with two writer tags still fails with a duplicate symbol, for **every**
+      pair, not just the one you added
+- [ ] Tag and its supported `GOOS` values added to the `writers` job in
+      [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+- [ ] Long-lived resources released: anything opened per `SetPSK` call is closed on every
+      path, including the error paths
+- [ ] `docs/<module-name>.md` written, including a **Platform** row
+- [ ] Row added to the [Module Index](#module-index), with its Platform value
 
 ---
 
