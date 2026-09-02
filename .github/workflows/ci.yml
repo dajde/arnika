@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Supersede in-flight runs for the same PR, so a rapid second push does not
+# queue behind the run it already obsoletes. Pushes to main are never
+# cancelled: every commit there keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Lint
