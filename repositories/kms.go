@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -102,9 +103,19 @@ func (r *HTTPKMSRepository) GetKeyByID(keyID *string) (key []byte, err error) {
 	return key, err
 }
 
+var ErrKMSUnavailable = errors.New("KMS did not deliver a key")
+
 func (r *HTTPKMSRepository) kmsRequest(path string) (id string, key []byte, err error) {
 	var kmsResp kmsResponse
 	var res *http.Response
+	// The last HTTP status actually observed. Clearing res below is what makes
+	// the post-loop nil-check work, but it also discards the status, and the
+	// three cases that reach here need different responses from an operator:
+	// 503 is a momentarily empty key pool that the next interval recovers from,
+	// while 401, 403 and 404 mean the tunnel is coasting on a stale PSK with no
+	// fresh QKD material coming. Reporting them identically leaves nothing to
+	// alert on. Zero means no HTTP response was ever received.
+	var lastStatus int
 
 	for attempt := 0; attempt <= r.maxRetries; attempt++ {
 		res, err = r.conn.Get(r.baseURL + path)
@@ -119,12 +130,23 @@ func (r *HTTPKMSRepository) kmsRequest(path string) (id string, key []byte, err 
 		// and the check below did not return. io.ReadAll then failed with
 		// "http: read on closed response body".
 		if res != nil {
+			lastStatus = res.StatusCode
 			_ = res.Body.Close()
 			res = nil
 		}
 		if attempt < r.maxRetries {
 			delay := r.backoffBaseDelay * time.Duration(1<<uint(attempt))
-			log.Printf("Attempt %d: Retrying in %s...", attempt+1, delay)
+			// The status goes in the per-attempt line as well as the final
+			// error, because this one fires every time rather than only at
+			// exhaustion. Status code only: the response body is never logged,
+			// and neither is the path -- dec_keys carries key_ID in its query
+			// string.
+			if lastStatus != 0 {
+				log.Printf("Attempt %d: KMS returned %d, retrying in %s...",
+					attempt+1, lastStatus, delay)
+			} else {
+				log.Printf("Attempt %d: Retrying in %s...", attempt+1, delay)
+			}
 			time.Sleep(delay)
 		}
 	}
@@ -134,9 +156,13 @@ func (r *HTTPKMSRepository) kmsRequest(path string) (id string, key []byte, err 
 	// A retry loop that never saw a 200 leaves res nil. Without this the
 	// caller could not distinguish "the KMS refused" from a successful fetch,
 	// because a non-OK status sets no error of its own.
+	//
+	// lastStatus is always set here. A transport error on the final attempt
+	// returns above, so reaching this line means at least one attempt received
+	// an HTTP response -- there is no path that reports "status 0".
 	if res == nil {
-		return "", nil, fmt.Errorf("KMS did not return %d after %d attempt(s)",
-			http.StatusOK, r.maxRetries+1)
+		return "", nil, fmt.Errorf("%w: status %d after %d attempt(s)",
+			ErrKMSUnavailable, lastStatus, r.maxRetries+1)
 	}
 	defer func() { _ = res.Body.Close() }()
 

@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -151,7 +152,78 @@ func TestKMSRequestReportsATransportError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a transport error")
 	}
-	if strings.Contains(err.Error(), "did not return 200") {
+	// errors.Is, not a substring. The point of the assertion is that a
+	// transport failure is NOT the exhausted-retry case, and asking that
+	// question of the sentinel says so directly -- where matching on wording
+	// only holds until someone rephrases the message.
+	if errors.Is(err, ErrKMSUnavailable) {
 		t.Errorf("a transport error was reported as a status problem: %v", err)
+	}
+}
+
+// TestKMSRequestKeepsTheObservedStatus is the follow-up requested in review on
+// PR #44: an exhausted retry loop must say WHICH status it kept seeing.
+//
+// 503 means the key pool is momentarily empty and the next interval will
+// recover. 401, 403 and 404 mean the tunnel is coasting on a stale PSK with no
+// fresh QKD material coming, and no amount of waiting fixes it. Reporting them
+// identically leaves an operator nothing to alert on -- which SECURITY.md asks
+// them to do.
+func TestKMSRequestKeepsTheObservedStatus(t *testing.T) {
+	for _, code := range []int{
+		http.StatusServiceUnavailable, // transient: wait
+		http.StatusUnauthorized,       // permanent: certificate or SAE user
+		http.StatusForbidden,          // permanent
+		http.StatusNotFound,           // permanent: wrong SAE path in KMS_URL
+	} {
+		srv := busyKMS(code)
+		_, _, err := newKMSTestRepo(srv.URL, 1).kmsRequest("/enc_keys")
+		srv.Close()
+
+		if err == nil {
+			t.Fatalf("%d: expected an error", code)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%d", code)) {
+			t.Errorf("%d: the status is not in the error, so 503 and 403 read "+
+				"the same: %v", code, err)
+		}
+	}
+}
+
+// The sentinel is the point of the change: callers must be able to branch
+// without matching strings. main.go's ticker.Reset(KMSRetryInterval) is right
+// for a 503 and wrong for a 401, and today it fires on both.
+func TestExhaustedRetriesAreIdentifiableWithoutStringMatching(t *testing.T) {
+	srv := busyKMS(http.StatusServiceUnavailable)
+	defer srv.Close()
+
+	_, _, err := newKMSTestRepo(srv.URL, 1).kmsRequest("/enc_keys")
+	if !errors.Is(err, ErrKMSUnavailable) {
+		t.Errorf("errors.Is(err, ErrKMSUnavailable) is false, so a caller can "+
+			"only tell by reading the message: %v", err)
+	}
+}
+
+// Neither the response body nor the request path may reach the message. The
+// path carries key_ID in the query string on dec_keys.
+func TestTheErrorLeaksNeitherBodyNorPath(t *testing.T) {
+	const secretBody = "SENSITIVE-BODY-CONTENT"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(secretBody))
+	}))
+	defer srv.Close()
+
+	_, _, err := newKMSTestRepo(srv.URL, 0).kmsRequest("/dec_keys?key_ID=SECRET-KEY-ID")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), secretBody) {
+		t.Errorf("the response body reached the error: %v", err)
+	}
+	for _, leak := range []string{"dec_keys", "SECRET-KEY-ID", "key_ID"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("the request path reached the error (%q): %v", leak, err)
+		}
 	}
 }
