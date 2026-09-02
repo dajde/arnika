@@ -3,46 +3,44 @@ set -e
 
 echo "====== Arnika CI Integration Test - Key Verification ======"
 
-# Wait for both nodes to start and exchange keys
-echo "Waiting for Arnika instances to exchange keys (32 seconds)..."
-sleep 32
-
 # Function to extract PSK from WireGuard interface
 get_psk() {
     local node=$1
     docker exec clab-arnika-ci-test-${node} wg show wg0 preshared-keys | awk '{print $2}'
 }
 
-# Retry loop: read both PSKs and compare. Retries handle the case where
-# the two sequential docker-exec calls straddle a key-rotation boundary
-# (rotation interval is 5 s; a single mismatch snapshot is not a real failure).
-MAX_ATTEMPTS=5
+# Poll until both nodes report the same non-empty PSK, instead of sleeping for
+# the worst case. The rotation interval is 5 s, so a healthy pair converges in
+# well under 15 s; polling also covers the case where the two sequential
+# docker-exec calls straddle a rotation boundary (a single mismatched snapshot
+# is not a real failure). On timeout we fall through to the checks below, which
+# report exactly what was wrong - the assertions are unchanged.
+VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-90}"
+POLL_INTERVAL=2
+DEADLINE=$((SECONDS + VERIFY_TIMEOUT))
 ATTEMPT=0
 PSK_A=""
 PSK_B=""
-while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    echo ""
-    echo "Extracting PSK from node-a (attempt $((ATTEMPT + 1))/$MAX_ATTEMPTS)..."
-    PSK_A=$(get_psk "node-a")
-    echo "Node-A PSK: ${PSK_A}"
 
-    echo ""
-    echo "Extracting PSK from node-b (attempt $((ATTEMPT + 1))/$MAX_ATTEMPTS)..."
-    PSK_B=$(get_psk "node-b")
-    echo "Node-B PSK: ${PSK_B}"
+echo "Waiting for Arnika instances to exchange keys (timeout ${VERIFY_TIMEOUT}s)..."
+while : ; do
+    ATTEMPT=$((ATTEMPT + 1))
+    PSK_A=$(get_psk "node-a" || true)
+    PSK_B=$(get_psk "node-b" || true)
 
     if [ -n "$PSK_A" ] && [ "$PSK_A" != "(none)" ] && \
        [ -n "$PSK_B" ] && [ "$PSK_B" != "(none)" ] && \
        [ "$PSK_A" = "$PSK_B" ]; then
+        echo "PSKs converged after ${SECONDS}s (attempt ${ATTEMPT})"
         break
     fi
 
-    ATTEMPT=$((ATTEMPT + 1))
-    if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-        echo ""
-        echo "PSKs not yet in sync, retrying in 2 seconds..."
-        sleep 2
+    if [ "$SECONDS" -ge "$DEADLINE" ]; then
+        echo "Timed out after ${VERIFY_TIMEOUT}s waiting for a matching PSK on both nodes"
+        break
     fi
+
+    sleep "$POLL_INTERVAL"
 done
 
 echo ""

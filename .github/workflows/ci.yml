@@ -166,32 +166,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built before the keys are generated, for two reasons: ci/setup-keys.sh
+      # borrows the `wg` binary from this image instead of installing
+      # wireguard-tools on the runner, and keeping the freshly generated keys
+      # out of the build context stops them invalidating the COPY layer.
+      - name: Build Arnika node image
+        uses: docker/build-push-action@v6
         with:
-          go-version-file: go.mod
+          context: .
+          file: ci/Dockerfile.node
+          tags: arnika-node:ci
+          load: true
+          cache-from: type=gha,scope=arnika-node
+          cache-to: type=gha,mode=max,scope=arnika-node
 
-      - name: Install WireGuard tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools
-
-      - name: Install Containerlab
-        run: |
-          bash -c "$(curl -sL https://get.containerlab.dev)"
+      - name: Build QKD simulator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/Dockerfile.simulator
+          tags: qkd-simulator:ci
+          load: true
+          cache-from: type=gha,scope=qkd-simulator
+          cache-to: type=gha,mode=max,scope=qkd-simulator
 
       - name: Generate WireGuard keys
         run: |
           chmod +x ci/setup-keys.sh
           ./ci/setup-keys.sh
 
-      - name: Build QKD simulator image
+      - name: Install Containerlab
         run: |
-          docker build -t qkd-simulator:ci -f ci/Dockerfile.simulator .
-
-      - name: Build Arnika node image
-        run: |
-          docker build -t arnika-node:ci -f ci/Dockerfile.node .
+          bash -c "$(curl -sL https://get.containerlab.dev)"
 
       - name: Deploy containerlab topology
         run: |
@@ -210,9 +219,8 @@ jobs:
         run: |
           docker exec clab-arnika-ci-test-node-b /bin/bash /etc/arnika/start.sh
 
-      - name: Wait for key exchange
-        run: sleep 15
-
+      # ci/verify-keys.sh polls for convergence itself, so there is no separate
+      # fixed wait here any more.
       - name: Verify key injection
         run: |
           chmod +x ci/verify-keys.sh
